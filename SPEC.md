@@ -2,7 +2,7 @@
 
 **Project**: Voice transcription app with Gemini Flash AI
 **Stack**: Next.js 15 (App Router), React 19, TypeScript, PWA
-**Env**: `GEMINI_API_KEY` (required), `ALLOWED_IPS` (optional, middleware)
+**Env**: `GEMINI_API_KEY` (required)
 
 ## File Structure
 
@@ -14,7 +14,6 @@
 | `app/layout.tsx` | Root layout, PWA metadata, i18n:fr |
 | `app/globals.css` | Global styles |
 | `app/page.module.css` | Page/component styles |
-| `middleware.ts` | Optional IP filtering (env var `ALLOWED_IPS`) |
 | `next.config.js` | Next.js config |
 | `public/manifest.json` | PWA manifest |
 | `public/icon-*.png` | App icons (192x192, 512x512, maskable variants) |
@@ -39,11 +38,6 @@
   1. **New**: Brief oral input → formatted text
   2. **Edit mode**: Existing text + verbal instructions → modified text
 - Response: `{success, content, cost: {totalEUR, totalUSD, inputTokens, outputTokens, model}, timestamp}`
-
-### Middleware
-- Optional IP allowlist (env: `ALLOWED_IPS`, comma-separated)
-- Allows localhost in dev mode
-- 403 if IP not allowed (if allowlist configured)
 
 ### PWA
 - Icons & manifest in public/
