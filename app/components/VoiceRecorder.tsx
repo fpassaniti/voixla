@@ -929,6 +929,15 @@ export default function VoiceRecorder() {
                 )}
             </div>
 
+            <a
+                href="https://buymeacoffee.com/fpassx"
+                target="_blank"
+                rel="noopener noreferrer"
+                className={styles.coffeeButton}
+            >
+                Le service vous plait ? ☕ Offrez-moi un café 💕
+            </a>
+
             {/* Section Historique */}
             {history.length > 0 && (
                 <div className={styles.historySection}>
