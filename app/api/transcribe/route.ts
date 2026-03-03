@@ -11,7 +11,6 @@ export async function POST(request: NextRequest) {
     
     const formData = await request.formData()
     const audioFile = formData.get('audio') as File
-    const selectedModel = (formData.get('model') as string) || 'pro'
     const existingTextRaw = formData.get('existingText')
     const existingText = existingTextRaw ? String(existingTextRaw) : null
     
@@ -104,58 +103,34 @@ TON RÔLE :
 IMPORTANT : Réponds uniquement avec le texte final rédigé, prêt à être utilisé. Si les consignes sont imprécises, fais de ton mieux pour interpréter l'intention et rédige un contenu de qualité.`
     }
 
-    // Fonction de génération avec fallback automatique
-    const generateWithFallback = async () => {
-      let actualModel = selectedModel
-      let modelName = selectedModel === 'flash' ? 'gemini-2.5-flash' : 'gemini-2.5-pro'
-      let model = genAI.getGenerativeModel({ model: modelName })
-      
-      try {
-        const result = await model.generateContent([prompt, audioPart])
-        return { result, actualModel: selectedModel, modelName }
-      } catch (error: any) {
-        console.log(`Erreur avec ${modelName}:`, error.message)
-        
-        // Si erreur de quota/limite et que ce n'est pas déjà Flash, fallback sur Flash
-        const isQuotaError = error.message?.includes('429') || 
-                           error.message?.includes('quota') ||
-                           error.message?.includes('Too Many Requests')
-        
-        if (isQuotaError && selectedModel !== 'flash') {
-          console.log('🔄 Quota atteint pour Pro, fallback automatique sur Flash...')
-          
-          // Retry avec Flash
-          actualModel = 'flash'
-          modelName = 'gemini-2.5-flash'
-          model = genAI.getGenerativeModel({ model: modelName })
-          
-          console.log(`Nouvelle tentative avec ${modelName}`)
-          const result = await model.generateContent([prompt, audioPart])
-          return { result, actualModel, modelName, fallback: true }
-        }
-        
-        // Si autres erreurs retryables
-        const isRetryableError = error.message?.includes('503') || 
-                               error.message?.includes('overloaded') ||
-                               error.message?.includes('500') ||
-                               error.message?.includes('502') ||
-                               error.message?.includes('504') ||
-                               error.message?.includes('timeout') ||
-                               error.message?.includes('network')
-        
-        if (isRetryableError) {
-          // Retry simple avec délai
-          console.log('⏳ Serveur surchargé, nouvelle tentative dans 3s...')
-          await new Promise(resolve => setTimeout(resolve, 3000))
-          const result = await model.generateContent([prompt, audioPart])
-          return { result, actualModel, modelName }
-        }
-        
+    // Utiliser uniquement Gemini Flash
+    const modelName = 'gemini-3-flash-preview'
+    const model = genAI.getGenerativeModel({ model: modelName })
+
+    let result: any
+    try {
+      result = await model.generateContent([prompt, audioPart])
+    } catch (error: any) {
+      console.log(`Erreur avec ${modelName}:`, error.message)
+
+      // Si erreur retryable
+      const isRetryableError = error.message?.includes('503') ||
+                             error.message?.includes('overloaded') ||
+                             error.message?.includes('500') ||
+                             error.message?.includes('502') ||
+                             error.message?.includes('504') ||
+                             error.message?.includes('timeout') ||
+                             error.message?.includes('network')
+
+      if (isRetryableError) {
+        // Retry simple avec délai
+        console.log('⏳ Serveur surchargé, nouvelle tentative dans 3s...')
+        await new Promise(resolve => setTimeout(resolve, 3000))
+        result = await model.generateContent([prompt, audioPart])
+      } else {
         throw error
       }
     }
-
-    const { result, actualModel, modelName, fallback } = await generateWithFallback()
     clearTimeout(timeout)
     
     if (!result) {
@@ -175,12 +150,10 @@ IMPORTANT : Réponds uniquement avec le texte final rédigé, prêt à être uti
       totalTokenCount: 0
     }
     
-    // Calculer le coût en euros (prix 2025)
-    const pricing = selectedModel === 'flash' 
-      ? { input: 0.30, output: 2.5 } // Flash: $0.30/$2.5 per 1M tokens
-      : { input: 1.25, output: 10 }  // Pro: $1.25/$10 per 1M tokens
-        
-    const divisor = 1000000 // Les deux modèles sont facturés par 1M tokens
+    // Calculer le coût en euros (prix 2025 - Gemini Flash uniquement)
+    const pricing = { input: 1.0, output: 3 } // Flash: $0.30/$2.5 per 1M tokens
+
+    const divisor = 1000000 // Facturé par 1M tokens
     const inputCostUSD = (usageMetadata.promptTokenCount || 0) * pricing.input / divisor
     const outputCostUSD = (usageMetadata.candidatesTokenCount || 0) * pricing.output / divisor
     const totalCostUSD = inputCostUSD + outputCostUSD
@@ -198,7 +171,6 @@ IMPORTANT : Réponds uniquement avec le texte final rédigé, prêt à être uti
         outputTokens: usageMetadata.candidatesTokenCount || 0,
         model: modelName
       },
-      fallback: fallback ? `Quota atteint pour Pro, fallback automatique sur Flash` : undefined,
       timestamp: new Date().toISOString()
     })
 

@@ -31,7 +31,6 @@ export default function VoiceRecorder() {
     const [error, setError] = useState('')
     const [retryError, setRetryError] = useState('')
     const [costData, setCostData] = useState<CostData | null>(null)
-    const [showModelSelection, setShowModelSelection] = useState(false)
     const [isProcessing, setIsProcessing] = useState(false)
     const [timer, setTimer] = useState('00:00')
     const [showRetryButton, setShowRetryButton] = useState(false)
@@ -51,7 +50,6 @@ export default function VoiceRecorder() {
     const startTimeRef = useRef<number>(0)
     const pausedTimeRef = useRef<number>(0)
     const timerIntervalRef = useRef<NodeJS.Timeout | null>(null)
-    const lastModelRef = useRef<string>('')
     const fileInputRef = useRef<HTMLInputElement | null>(null)
     const sizeCheckIntervalRef = useRef<NodeJS.Timeout | null>(null)
 
@@ -135,7 +133,7 @@ export default function VoiceRecorder() {
                 }
             }
 
-            mediaRecorderRef.current.onstop = () => {
+            mediaRecorderRef.current.onstop = async () => {
                 const audioBlob = new Blob(audioChunksRef.current, {type: 'audio/webm'})
 
                 if (audioBlob.size === 0) {
@@ -145,8 +143,8 @@ export default function VoiceRecorder() {
                 }
 
                 recordedAudioRef.current = audioBlob
-                setShowModelSelection(true)
-                setStatus('Enregistrement terminé - Choisissez le modèle')
+                // Traiter automatiquement avec Flash
+                await processAudio()
             }
 
             mediaRecorderRef.current.start(100)
@@ -255,7 +253,7 @@ export default function VoiceRecorder() {
         }
     }, [])
 
-    const handleFileUpload = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const handleFileUpload = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0]
         if (file) {
             // Vérifier le type de fichier
@@ -266,11 +264,11 @@ export default function VoiceRecorder() {
             }
 
             recordedAudioRef.current = file
-            setShowModelSelection(true)
-            setStatus('Fichier uploadé - Choisissez le modèle')
             setCanDownload(false)
             setError('')
             setRetryError('')
+            // Traiter automatiquement avec Flash
+            await processAudio()
         }
         // Reset du input pour permettre de re-upload le même fichier
         if (event.target) {
@@ -454,17 +452,15 @@ export default function VoiceRecorder() {
         setEditBuffer('')
     }, [editBuffer, transcript, history, updateLastHistoryItem])
 
-    const processWithModel = useCallback(async (modelType: string) => {
+    const processAudio = useCallback(async () => {
         if (!recordedAudioRef.current) return
 
-        lastModelRef.current = modelType
-        setShowModelSelection(false)
         setIsProcessing(true)
         setStatus('Transcription en cours...')
         setError('')
         setRetryError('')
         setShowRetryButton(false)
-        
+
         let result: any
         try {
             const formData = new FormData()
@@ -476,8 +472,7 @@ export default function VoiceRecorder() {
             }
 
             formData.append('audio', recordedAudioRef.current, 'recording.webm')
-            formData.append('model', modelType)
-            
+
             // Toujours envoyer le transcript existant (vide ou non)
             const existingText = transcript || ''
             formData.append('existingText', existingText)
@@ -514,15 +509,10 @@ export default function VoiceRecorder() {
                 if (result.cost) {
                     setCostData(result.cost)
                 }
-                if (result.fallback) {
-                    setRetryError(`ℹ️ ${result.fallback}`)
-                    setShowRetryButton(false) // Pas de bouton retry pour fallback automatique
-                }
-
                 setStatus(`${existingText ? 'Transcription complétée' : 'Transcription terminée'}. Compléter votre transcription avec un nouvel enregistrement`)
 
                 // Sauvegarder dans l'historique
-                saveToHistory(result.content, modelType, result.cost)
+                saveToHistory(result.content, 'flash', result.cost)
 
             } else {
                 throw new Error(result.error || `Erreur HTTP: ${response.status}`)
@@ -551,7 +541,7 @@ export default function VoiceRecorder() {
                 error.message.includes('forbidden')
 
             if (isKnownRetryableError) {
-                setRetryError(`Le modèle ${modelType === 'flash' ? 'Gemini Flash' : 'Gemini Pro'} est surchargé. Vous pouvez ressayer dans quelques instants.`)
+                setRetryError(`Gemini Flash est surchargé. Vous pouvez ressayer dans quelques instants.`)
                 setShowRetryButton(true)
                 // En cas d'erreur, garder le transcript existant
                 setCostData(null)
@@ -576,12 +566,12 @@ export default function VoiceRecorder() {
     }, [transcript, saveToHistory])
 
     const retryLastRequest = useCallback(async () => {
-        if (!recordedAudioRef.current || !lastModelRef.current) return
+        if (!recordedAudioRef.current) return
 
         setShowRetryButton(false)
         await new Promise(resolve => setTimeout(resolve, 2000))
-        await processWithModel(lastModelRef.current)
-    }, [processWithModel])
+        await processAudio()
+    }, [processAudio])
 
     // Supprimer un élément de l'historique
     const deleteFromHistory = useCallback((id: string) => {
@@ -613,7 +603,6 @@ export default function VoiceRecorder() {
     const restoreFromHistory = useCallback((item: HistoryItem) => {
         setTranscript(item.content)
         setCostData(item.cost || null)
-        lastModelRef.current = item.model
         setStatus('Transcription restaurée depuis l\'historique')
 
         // Scroll vers le haut pour voir la transcription restaurée
@@ -680,7 +669,7 @@ export default function VoiceRecorder() {
                 )}
 
                 {/* New Transcription Button */}
-                {transcript && !isRecording && !isPaused && !isProcessing && !showModelSelection && (
+                {transcript && !isRecording && !isPaused && !isProcessing && (
                     <button
                         onClick={startNewTranscription}
                         className={styles.floatingIconButton}
@@ -746,7 +735,7 @@ export default function VoiceRecorder() {
                 </div>
                 
                 {/* Message d'information sur le mode complément */}
-                {!isRecording && !isPaused && !isProcessing && !showModelSelection && transcript && (
+                {!isRecording && !isPaused && !isProcessing && transcript && (
                     <div className={styles.infoMessage}>
                         💡 Par défaut, un nouveau mémo complète la transcription existante
                     </div>
@@ -754,27 +743,6 @@ export default function VoiceRecorder() {
             </div>
 
 
-            {showModelSelection && (
-                <div className={styles.modelSelection}>
-                    <h4>🤖 Choisissez le modèle de transcription :</h4>
-                    <div className={styles.modelButtons}>
-                        <button
-                            onClick={() => processWithModel('flash')}
-                            className={`${styles.modelButton} ${styles.flash}`}
-                        >
-                            ⚡ Rapide
-                            <div className={styles.modelInfo}>Gemini Flash - Réponse quasi instantanée</div>
-                        </button>
-                        <button
-                            onClick={() => processWithModel('pro')}
-                            className={`${styles.modelButton} ${styles.pro}`}
-                        >
-                            🏆 Précis
-                            <div className={styles.modelInfo}>Gemini Pro - Lent mais qualité maximale</div>
-                        </button>
-                    </div>
-                </div>
-            )}
 
 
             {/* Messages d'erreur et sélection de modèle */}
@@ -951,21 +919,6 @@ export default function VoiceRecorder() {
                         </div>
 
 
-                        {/* Bouton pour réessayer avec Pro après Flash */}
-                        {recordedAudioRef.current && lastModelRef.current === 'flash' && !isProcessing && (
-                            <div className={styles.upgradeSection}>
-                                <p className={styles.upgradeText}>
-                                    💡 Pas satisfait ? Essayez avec le modèle Pro pour une qualité supérieure
-                                </p>
-                                <button
-                                    onClick={() => processWithModel('pro')}
-                                    className={`${styles.upgradeButton} ${styles.pro}`}
-                                    disabled={isProcessing}
-                                >
-                                    🏆 Réessayer avec Gemini Pro
-                                </button>
-                            </div>
-                        )}
                     </>
                 )}
 
@@ -1008,9 +961,8 @@ export default function VoiceRecorder() {
                                                 {item.content.length > 100 && '...'}
                                             </div>
                                             <div className={styles.historyItemMeta}>
-                                                <span
-                                                    className={`${styles.modelBadge} ${item.model === 'flash' ? styles.flash : styles.pro}`}>
-                                                    {item.model === 'flash' ? '⚡ Flash' : '🏆 Pro'}
+                                                <span className={styles.modelBadge}>
+                                                    ⚡ Flash
                                                 </span>
                                                 <span className={styles.historyTime}>
                                                     {timeAgo < 1 ? 'À l\'instant' :
