@@ -15,7 +15,7 @@
 | `app/globals.css` | Global styles |
 | `app/page.module.css` | Page/component styles |
 | `middleware.ts` | Optional IP filtering (env var `ALLOWED_IPS`) |
-| `next.config.js` | PWA config (@ducanh2912/next-pwa) |
+| `next.config.js` | Next.js config |
 | `public/manifest.json` | PWA manifest |
 | `public/icon-*.png` | App icons (192x192, 512x512, maskable variants) |
 
@@ -46,8 +46,8 @@
 - 403 if IP not allowed (if allowlist configured)
 
 ### PWA
-- Disabled in dev (next.config.js)
 - Icons & manifest in public/
+- Metadata configured in layout.tsx
 
 ## Key Technical Details
 
