@@ -148,14 +148,24 @@ export async function POST(request: NextRequest) {
     let prompt: string
     let documentReferences = ''
 
-    // Construire les références aux documents
+    // Construire les références aux documents avec instructions explicites
     if (documents.length > 0) {
-      documentReferences = '\n\nDOCUMENTS DE RÉFÉRENCE :\n'
+      documentReferences = `
+
+DOCUMENTS DE RÉFÉRENCE JOINTS :
+Les documents suivants ont été joints par l'utilisateur. Tu DOIS les lire attentivement et utiliser leur contenu pour enrichir ta rédaction. L'audio contient les instructions vocales, les documents fournissent le contexte et les données de référence.
+`
       documents.forEach((doc, index) => {
         if (doc.type === 'text') {
-          documentReferences += `\n--- ${doc.name} ---\n${doc.content}\n`
+          documentReferences += `
+--- ${doc.name} ---
+${doc.content}
+`
         } else {
-          documentReferences += `\n--- ${doc.name} (document image/PDF) ---\n(contenu visual fourni)\n`
+          documentReferences += `
+--- ${doc.name} (document PDF/image) ---
+(document joint en pièce jointe — analyse son contenu visuel et utilise-le dans ta rédaction)
+`
         }
       })
     }
@@ -184,7 +194,8 @@ TON RÔLE :
 2. Appliquer EXACTEMENT les instructions données dans l'audio
 3. Si c'est un changement de formatage : appliquer le formatage au texte existant
 4. Si c'est un ajout : intégrer harmonieusement avec le texte existant
-5. Produire un texte COMPLET qui respecte les nouvelles instructions
+5. Si des documents de référence sont joints, les analyser et intégrer leur contenu selon les instructions audio
+6. Produire un texte COMPLET qui respecte les nouvelles instructions
 
 IMPORTANT :
 - Réponds UNIQUEMENT avec le texte final modifié/complété
@@ -212,7 +223,9 @@ TON RÔLE :
 1. Analyser le brief oral pour identifier les consignes et le contenu
 2. Rédiger un texte cohérent et bien structuré selon ces consignes
 3. Adapter le style et le ton aux demandes exprimées
-4. Sauf indication contraire, formater le texte pour être prêt à copier coller dans un editeur de texte ou slack
+4. Si des documents de référence sont joints, les analyser en détail et utiliser leur contenu comme base de données pour ta rédaction
+5. Extraire les informations pertinentes des documents pour répondre aux instructions vocales
+6. Sauf indication contraire, formater le texte pour être prêt à copier coller dans un editeur de texte ou slack
 
 IMPORTANT : Réponds uniquement avec le texte final rédigé, prêt à être utilisé. Si les consignes sont imprécises, fais de ton mieux pour interpréter l'intention et rédige un contenu de qualité.`
     }

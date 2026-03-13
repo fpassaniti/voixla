@@ -136,11 +136,17 @@ export default function VoiceRecorder() {
         const frequencyData = new Uint8Array(analyserRef.current.frequencyBinCount)
 
         const updateAudioLevel = () => {
-            if (!analyserRef.current || !isRecording) return
+            // Vérifier si on est toujours en enregistrement (vérifier directement le mediaRecorder plutôt que le state)
+            if (!analyserRef.current || !mediaRecorderRef.current || mediaRecorderRef.current.state === 'inactive') return
 
             analyserRef.current.getByteFrequencyData(frequencyData)
-            const average = frequencyData.reduce((a, b) => a + b) / frequencyData.length
-            const level = Math.round((average / 255) * 100)
+            // Calculer la moyenne mais ignorer les valeurs très basses (bruit de fond)
+            const relevantData = frequencyData.filter(v => v > 10)
+            const average = relevantData.length > 0
+                ? relevantData.reduce((a, b) => a + b) / relevantData.length
+                : 0
+            // Appliquer une courbe exponentielle pour plus de sensibilité (surtout pour les faibles volumes)
+            const level = Math.round(Math.pow((average / 255), 0.5) * 100)
 
             // Throttle les updates du state (toutes les 3 frames)
             frameCount++
@@ -163,7 +169,7 @@ export default function VoiceRecorder() {
         }
 
         animationFrameRef.current = requestAnimationFrame(updateAudioLevel)
-    }, [isRecording])
+    }, [])
 
     const startTimer = useCallback(() => {
         startTimeRef.current = Date.now() - pausedTimeRef.current
@@ -265,6 +271,7 @@ export default function VoiceRecorder() {
             setStatus('Enregistrement en cours... Cliquez pour arrêter')
             setError('')
             setRetryError('')
+            setAttachedDocuments([])
             setShowRetryButton(false)
             remainingTimeRef.current = 0
             silenceCounterRef.current = 0
@@ -278,14 +285,30 @@ export default function VoiceRecorder() {
             try {
                 const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
                 audioContextRef.current = audioContext
+
+                // Reprendre l'AudioContext (peut être suspendu ou non selon le navigateur)
+                // Appeler resume() inconditionnellement - c'est une no-op si déjà running
+                if (audioContext.state !== 'closed') {
+                    await audioContext.resume()
+                }
+
                 const analyser = audioContext.createAnalyser()
-                analyser.fftSize = 256
+                analyser.fftSize = 2048  // Augmenter de 256 à 2048 pour meilleure précision
                 analyserRef.current = analyser
 
                 // Connecter la source audio à l'analyser
                 const source = audioContext.createMediaStreamSource(stream)
                 source.connect(analyser)
 
+                // Créer un GainNode silencieux pour que le graphe audio soit valide
+                // (l'analyser doit avoir une destination, mais on ne veut pas d'écho du micro)
+                const silentGain = audioContext.createGain()
+                silentGain.gain.value = 0
+                analyser.connect(silentGain)
+                silentGain.connect(audioContext.destination)
+
+                // Petit délai pour que le flux audio soit prêt et que le state soit synchronisé
+                await new Promise(resolve => setTimeout(resolve, 100))
                 startAudioLevelMonitoring()
             } catch (e) {
                 console.warn('Impossible de créer l\'AudioContext pour le monitoring:', e)
@@ -324,7 +347,7 @@ export default function VoiceRecorder() {
         }
     }, [isRecording, isPaused, pauseTimer])
 
-    const resumeRecording = useCallback(() => {
+    const resumeRecording = useCallback(async () => {
         if (mediaRecorderRef.current && isRecording && isPaused) {
             mediaRecorderRef.current.resume()
             setIsPaused(false)
@@ -333,8 +356,10 @@ export default function VoiceRecorder() {
             // Recalculer le temps écoulé et remettre en place les timeouts
             const elapsedSeconds = Math.floor(pausedTimeRef.current / 1000)
             setupAutoStopTimeouts(elapsedSeconds)
-            // Resume l'AudioContext
-            if (audioContextRef.current) audioContextRef.current.resume()
+            // Resume l'AudioContext et attendre sa reprise
+            if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+                await audioContextRef.current.resume()
+            }
             // Redémarrer le monitoring audio
             startAudioLevelMonitoring()
         }
@@ -695,6 +720,9 @@ export default function VoiceRecorder() {
 
                 // Sauvegarder dans l'historique
                 saveToHistory(result.content, 'flash', result.cost)
+
+                // Vider les documents attachés après envoi
+                setAttachedDocuments([])
 
             } else {
                 throw new Error(result.error || `Erreur HTTP: ${response.status}`)
