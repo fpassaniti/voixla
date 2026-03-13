@@ -21,22 +21,31 @@
 ## Services/Features
 
 ### VoiceRecorder Component
-- Real-time audio recording (MediaRecorder API)
+- Real-time audio recording (MediaRecorder API) with 15-minute auto-stop limit
+- Real-time audio level indicator with silence detection
 - Automatic transcription with Gemini Flash
 - Real-time cost calculation
 - LocalStorage history (id, timestamp, content, model, cost, preview)
 - Edit transcript & retry transcription
 - Download transcript as file
 - Copy to clipboard
+- Document attachment support (PDF, images, DOCX, XLSX)
+- Privacy information modal with creator links
+- Recording duration warning at 14 minutes
 
 ### Transcribe Endpoint (`/api/transcribe`)
-- Accepts: audio file (FormData) + optional existingText
+- Accepts: audio file (FormData) + optional existingText + optional documents
 - Uses Gemini Flash for all transcriptions
 - Retry logic: 503/overloaded/timeout errors retry after 3s
-- Timeout: 10min per request, 50MB max file
+- Timeout: 10min per request, 30MB max total (4MB audio + documents)
+- Document support:
+  - PDF/images: sent as inline data to Gemini
+  - DOCX: text extracted via mammoth
+  - XLSX: CSV extracted via xlsx
+  - Max 5 documents per request
 - Two prompt modes:
-  1. **New**: Brief oral input → formatted text
-  2. **Edit mode**: Existing text + verbal instructions → modified text
+  1. **New**: Brief oral input + optional documents → formatted text
+  2. **Edit mode**: Existing text + verbal instructions + optional documents → modified text
 - Response: `{success, content, cost: {totalEUR, totalUSD, inputTokens, outputTokens, model}, timestamp}`
 
 ### PWA

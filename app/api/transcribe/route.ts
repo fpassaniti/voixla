@@ -1,6 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { GoogleGenerativeAI } from '@google/generative-ai'
 
+// Dynamic imports for document processing
+let mammoth: any = null
+let XLSX: any = null
+
+async function initDocumentProcessors() {
+  if (!mammoth) {
+    try {
+      mammoth = await import('mammoth')
+    } catch (e) {
+      console.warn('mammoth not installed')
+    }
+  }
+  if (!XLSX) {
+    try {
+      XLSX = await import('xlsx')
+    } catch (e) {
+      console.warn('xlsx not installed')
+    }
+  }
+}
+
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!)
 
 export async function POST(request: NextRequest) {
@@ -22,14 +43,87 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Validation de la taille (max 50MB pour éviter les timeouts)
-    const maxSize = 50 * 1024 * 1024 // 50MB
-    if (audioFile.size > maxSize) {
+    // Initialize document processors
+    await initDocumentProcessors()
+
+    // Validation de la taille - audio max 4MB (déjà géré côté client), total max 30MB (limite Cloud Run)
+    const maxTotalSize = 30 * 1024 * 1024 // 30MB total
+    const maxAudioSize = 4 * 1024 * 1024 // 4MB pour l'audio
+
+    if (audioFile.size > maxAudioSize) {
       clearTimeout(timeout)
       return NextResponse.json(
-        { error: `Fichier trop volumineux (${Math.round(audioFile.size / 1024 / 1024)}MB). Maximum: 50MB` },
+        { error: `Fichier audio trop volumineux (${Math.round(audioFile.size / 1024 / 1024)}MB). Maximum: 4MB` },
         { status: 413 }
       )
+    }
+
+    // Extraire et valider les documents
+    const documentCountRaw = formData.get('documentCount')
+    const documentCount = documentCountRaw ? parseInt(String(documentCountRaw)) : 0
+    const documents: Array<{type: 'inline' | 'text', name: string, mimeType?: string, data?: string, content?: string}> = []
+    let totalSize = audioFile.size
+
+    for (let i = 0; i < documentCount; i++) {
+      const docFile = formData.get(`document_${i}`) as File
+      if (!docFile) continue
+
+      totalSize += docFile.size
+      if (totalSize > maxTotalSize) {
+        clearTimeout(timeout)
+        return NextResponse.json(
+          { error: `Taille totale dépassée (${Math.round(totalSize / 1024 / 1024)}MB). Maximum: 30MB` },
+          { status: 413 }
+        )
+      }
+
+      const fileName = docFile.name.toLowerCase()
+      const mimeType = docFile.type
+
+      // Traiter PDF et images comme données inline
+      if (mimeType === 'application/pdf' || mimeType.startsWith('image/')) {
+        const arrayBuffer = await docFile.arrayBuffer()
+        const base64Data = Buffer.from(arrayBuffer).toString('base64')
+        documents.push({
+          type: 'inline',
+          name: docFile.name,
+          mimeType: mimeType,
+          data: base64Data
+        })
+      }
+      // Extraire texte des DOCX
+      else if (fileName.endsWith('.docx') && mammoth) {
+        try {
+          const arrayBuffer = await docFile.arrayBuffer()
+          const result = await mammoth.extractRawText({ arrayBuffer })
+          documents.push({
+            type: 'text',
+            name: docFile.name,
+            content: result.value
+          })
+        } catch (e) {
+          console.warn(`Erreur extraction DOCX ${docFile.name}:`, e)
+        }
+      }
+      // Extraire texte des XLSX
+      else if (fileName.endsWith('.xlsx') && XLSX) {
+        try {
+          const arrayBuffer = await docFile.arrayBuffer()
+          const workbook = XLSX.read(arrayBuffer, { type: 'array' })
+          let sheetText = ''
+          workbook.SheetNames.forEach((sheetName: string) => {
+            const csv = XLSX.utils.sheet_to_csv(workbook.Sheets[sheetName])
+            sheetText += `\n=== ${sheetName} ===\n${csv}`
+          })
+          documents.push({
+            type: 'text',
+            name: docFile.name,
+            content: sheetText
+          })
+        } catch (e) {
+          console.warn(`Erreur extraction XLSX ${docFile.name}:`, e)
+        }
+      }
     }
 
     // Convertir le fichier en base64
@@ -45,7 +139,20 @@ export async function POST(request: NextRequest) {
 
     // Créer le prompt selon le mode (nouveau ou complément)
     let prompt: string
-    
+    let documentReferences = ''
+
+    // Construire les références aux documents
+    if (documents.length > 0) {
+      documentReferences = '\n\nDOCUMENTS DE RÉFÉRENCE :\n'
+      documents.forEach((doc, index) => {
+        if (doc.type === 'text') {
+          documentReferences += `\n--- ${doc.name} ---\n${doc.content}\n`
+        } else {
+          documentReferences += `\n--- ${doc.name} (document image/PDF) ---\n(contenu visual fourni)\n`
+        }
+      })
+    }
+
     if (existingText && existingText.trim()) {
       // Mode complément
       prompt = `Tu es un assistant de rédaction expert. Tu as déjà produit ce texte :
@@ -63,7 +170,7 @@ Les instructions peuvent être :
 - Réorganiser le contenu
 - Changer le style ou le ton
 - Corriger ou préciser certains points
-- Continuer le texte avec de nouveaux éléments
+- Continuer le texte avec de nouveaux éléments${documentReferences}
 
 TON RÔLE :
 1. Prendre le TEXTE EXISTANT ci-dessus comme base
@@ -72,7 +179,7 @@ TON RÔLE :
 4. Si c'est un ajout : intégrer harmonieusement avec le texte existant
 5. Produire un texte COMPLET qui respecte les nouvelles instructions
 
-IMPORTANT : 
+IMPORTANT :
 - Réponds UNIQUEMENT avec le texte final modifié/complété
 - N'ajoute AUCUNE explication du type "voici le texte modifié"
 - Applique les instructions à la lettre
@@ -92,7 +199,7 @@ CONTENU à rédiger :
 - Informations factuelles
 - Idées principales à développer
 - Points clés à mettre en avant
-- Structure souhaitée
+- Structure souhaitée${documentReferences}
 
 TON RÔLE :
 1. Analyser le brief oral pour identifier les consignes et le contenu
@@ -107,9 +214,24 @@ IMPORTANT : Réponds uniquement avec le texte final rédigé, prêt à être uti
     const modelName = 'gemini-3-flash-preview'
     const model = genAI.getGenerativeModel({ model: modelName })
 
+    // Construire les parts pour generateContent
+    const contentParts: any[] = [prompt, audioPart]
+
+    // Ajouter les documents inline (PDF et images)
+    documents.forEach(doc => {
+      if (doc.type === 'inline' && doc.data && doc.mimeType) {
+        contentParts.push({
+          inlineData: {
+            data: doc.data,
+            mimeType: doc.mimeType
+          }
+        })
+      }
+    })
+
     let result: any
     try {
-      result = await model.generateContent([prompt, audioPart])
+      result = await model.generateContent(contentParts)
     } catch (error: any) {
       console.log(`Erreur avec ${modelName}:`, error.message)
 
@@ -126,7 +248,7 @@ IMPORTANT : Réponds uniquement avec le texte final rédigé, prêt à être uti
         // Retry simple avec délai
         console.log('⏳ Serveur surchargé, nouvelle tentative dans 3s...')
         await new Promise(resolve => setTimeout(resolve, 3000))
-        result = await model.generateContent([prompt, audioPart])
+        result = await model.generateContent(contentParts)
       } else {
         throw error
       }

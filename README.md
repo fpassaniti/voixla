@@ -66,3 +66,9 @@ Ouvrir [http://localhost:3000](http://localhost:3000)
 - **TypeScript**
 - **Google Gemini API**
 - **CSS Modules**
+
+## Notes
+
+```
+mcp add-json github '{"type":"http","url":"https://api.githubcopilot.com/mcp","headers":{"Authorization":"Bearer PAT"}}'
+```

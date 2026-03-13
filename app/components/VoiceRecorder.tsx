@@ -2,7 +2,7 @@
 
 import {useState, useRef, useCallback, useEffect} from 'react'
 import ReactMarkdown from 'react-markdown'
-import { FaUpload } from "react-icons/fa";
+import { FaFileAudio, FaPaperclip } from "react-icons/fa";
 import { FaDownload } from "react-icons/fa6";
 import styles from '../page.module.css'
 
@@ -43,6 +43,11 @@ export default function VoiceRecorder() {
     const [editBuffer, setEditBuffer] = useState('')
     const [showExamples, setShowExamples] = useState(true)
     const [hasInteracted, setHasInteracted] = useState(false)
+    const [timeWarning, setTimeWarning] = useState(false)
+    const [audioLevel, setAudioLevel] = useState(0)
+    const [noAudioDetected, setNoAudioDetected] = useState(false)
+    const [showAboutModal, setShowAboutModal] = useState(false)
+    const [attachedDocuments, setAttachedDocuments] = useState<File[]>([])
 
     const mediaRecorderRef = useRef<MediaRecorder | null>(null)
     const audioChunksRef = useRef<Blob[]>([])
@@ -51,11 +56,20 @@ export default function VoiceRecorder() {
     const pausedTimeRef = useRef<number>(0)
     const timerIntervalRef = useRef<NodeJS.Timeout | null>(null)
     const fileInputRef = useRef<HTMLInputElement | null>(null)
+    const docInputRef = useRef<HTMLInputElement | null>(null)
     const sizeCheckIntervalRef = useRef<NodeJS.Timeout | null>(null)
+    const warningTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+    const autoStopTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+    const remainingTimeRef = useRef<number>(0)
+    const audioContextRef = useRef<AudioContext | null>(null)
+    const analyserRef = useRef<AnalyserNode | null>(null)
+    const animationFrameRef = useRef<number | null>(null)
+    const silenceCounterRef = useRef<number>(0)
 
     // Constantes pour les limites
     const MAX_FILE_SIZE_MB = 4 // Limite à 4Mo pour rester sous la limite Vercel de 4.5Mo
     const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
+    const MAX_RECORDING_DURATION_SECONDS = 15 * 60 // 15 minutes
 
     // Fonction pour formatter la taille de fichier
     const formatFileSize = useCallback((bytes: number) => {
@@ -73,6 +87,83 @@ export default function VoiceRecorder() {
             sizeCheckIntervalRef.current = null
         }
     }, [])
+
+    // Configurer les timeouts pour l'arrêt automatique à 15 minutes
+    const setupAutoStopTimeouts = useCallback((delaySeconds: number) => {
+        // Nettoyer les timeouts précédents
+        if (warningTimeoutRef.current) clearTimeout(warningTimeoutRef.current)
+        if (autoStopTimeoutRef.current) clearTimeout(autoStopTimeoutRef.current)
+
+        const warningTime = 14 * 60 // 14 minutes en secondes
+        const totalTime = MAX_RECORDING_DURATION_SECONDS
+
+        // Avertissement à 14 minutes
+        if (delaySeconds <= warningTime) {
+            const warningDelay = (warningTime - delaySeconds) * 1000
+            warningTimeoutRef.current = setTimeout(() => {
+                setTimeWarning(true)
+            }, warningDelay)
+        }
+
+        // Arrêt automatique à 15 minutes
+        if (delaySeconds <= totalTime) {
+            const stopDelay = (totalTime - delaySeconds) * 1000
+            autoStopTimeoutRef.current = setTimeout(() => {
+                finalStopRecording()
+                setStatus('Arrêt automatique - Limite de 15 minutes atteinte')
+            }, stopDelay)
+        }
+    }, [MAX_RECORDING_DURATION_SECONDS])
+
+    // Nettoyer les timeouts d'arrêt automatique
+    const clearAutoStopTimeouts = useCallback(() => {
+        if (warningTimeoutRef.current) {
+            clearTimeout(warningTimeoutRef.current)
+            warningTimeoutRef.current = null
+        }
+        if (autoStopTimeoutRef.current) {
+            clearTimeout(autoStopTimeoutRef.current)
+            autoStopTimeoutRef.current = null
+        }
+        setTimeWarning(false)
+    }, [])
+
+    // Fonction pour monitorer le niveau audio
+    const startAudioLevelMonitoring = useCallback(() => {
+        if (!analyserRef.current) return
+
+        let frameCount = 0
+        const frequencyData = new Uint8Array(analyserRef.current.frequencyBinCount)
+
+        const updateAudioLevel = () => {
+            if (!analyserRef.current || !isRecording) return
+
+            analyserRef.current.getByteFrequencyData(frequencyData)
+            const average = frequencyData.reduce((a, b) => a + b) / frequencyData.length
+            const level = Math.round((average / 255) * 100)
+
+            // Throttle les updates du state (toutes les 3 frames)
+            frameCount++
+            if (frameCount % 3 === 0) {
+                setAudioLevel(level)
+
+                // Détecter le silence (durée ~3 secondes à ~60fps = ~180 frames)
+                if (level < 5) {
+                    silenceCounterRef.current++
+                    if (silenceCounterRef.current > 180) {
+                        setNoAudioDetected(true)
+                    }
+                } else {
+                    silenceCounterRef.current = 0
+                    setNoAudioDetected(false)
+                }
+            }
+
+            animationFrameRef.current = requestAnimationFrame(updateAudioLevel)
+        }
+
+        animationFrameRef.current = requestAnimationFrame(updateAudioLevel)
+    }, [isRecording])
 
     const startTimer = useCallback(() => {
         startTimeRef.current = Date.now() - pausedTimeRef.current
@@ -100,6 +191,28 @@ export default function VoiceRecorder() {
         pausedTimeRef.current = 0
         setTimer('00:00')
     }, [])
+
+    // Fonction pour calculer la taille approximative pendant l'enregistrement
+    const updateFileSize = useCallback(() => {
+        if (audioChunksRef.current.length > 0) {
+            const currentSize = audioChunksRef.current.reduce((total, chunk) => total + chunk.size, 0)
+            setFileSize(currentSize)
+            setFileSizeFormatted(formatFileSize(currentSize))
+
+            // Arrêt automatique si on approche de la limite
+            if (currentSize >= MAX_FILE_SIZE_BYTES) {
+                console.log(`🛑 Arrêt automatique: limite de ${MAX_FILE_SIZE_MB}Mo atteinte (${formatFileSize(currentSize)})`)
+                setStatus(`Arrêt automatique - Limite de ${MAX_FILE_SIZE_MB}Mo atteinte`)
+            }
+        }
+    }, [formatFileSize, MAX_FILE_SIZE_BYTES, MAX_FILE_SIZE_MB])
+
+    // Démarrer le suivi de taille
+    const startSizeTracking = useCallback(() => {
+        setFileSize(0)
+        setFileSizeFormatted('0 KB')
+        sizeCheckIntervalRef.current = setInterval(updateFileSize, 1000) // Vérifier toutes les secondes
+    }, [updateFileSize])
 
     const startRecording = useCallback(async () => {
         try {
@@ -153,14 +266,36 @@ export default function VoiceRecorder() {
             setError('')
             setRetryError('')
             setShowRetryButton(false)
+            remainingTimeRef.current = 0
+            silenceCounterRef.current = 0
+            setAudioLevel(0)
+            setNoAudioDetected(false)
             startTimer()
             startSizeTracking()
+            setupAutoStopTimeouts(0)
+
+            // Créer l'AudioContext et AnalyserNode pour le monitoring du niveau audio
+            try {
+                const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+                audioContextRef.current = audioContext
+                const analyser = audioContext.createAnalyser()
+                analyser.fftSize = 256
+                analyserRef.current = analyser
+
+                // Connecter la source audio à l'analyser
+                const source = audioContext.createMediaStreamSource(stream)
+                source.connect(analyser)
+
+                startAudioLevelMonitoring()
+            } catch (e) {
+                console.warn('Impossible de créer l\'AudioContext pour le monitoring:', e)
+            }
 
         } catch (error) {
             console.error('Erreur d\'accès au microphone:', error)
             setError('Impossible d\'accéder au microphone. Vérifiez les permissions.')
         }
-    }, [startTimer])
+    }, [startTimer, startSizeTracking, setupAutoStopTimeouts, startAudioLevelMonitoring])
 
     const stopRecording = useCallback(() => {
         if (mediaRecorderRef.current && isRecording) {
@@ -179,6 +314,13 @@ export default function VoiceRecorder() {
             setIsPaused(true)
             setStatus('Enregistrement en pause - Cliquez pour reprendre')
             pauseTimer()
+            // Pause les timeouts d'arrêt automatique
+            if (warningTimeoutRef.current) clearTimeout(warningTimeoutRef.current)
+            if (autoStopTimeoutRef.current) clearTimeout(autoStopTimeoutRef.current)
+            // Suspend l'AudioContext
+            if (audioContextRef.current) audioContextRef.current.suspend()
+            // Arrêter l'animation frame
+            if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current)
         }
     }, [isRecording, isPaused, pauseTimer])
 
@@ -188,8 +330,15 @@ export default function VoiceRecorder() {
             setIsPaused(false)
             setStatus('Enregistrement en cours... Cliquez pour arrêter')
             startTimer()
+            // Recalculer le temps écoulé et remettre en place les timeouts
+            const elapsedSeconds = Math.floor(pausedTimeRef.current / 1000)
+            setupAutoStopTimeouts(elapsedSeconds)
+            // Resume l'AudioContext
+            if (audioContextRef.current) audioContextRef.current.resume()
+            // Redémarrer le monitoring audio
+            startAudioLevelMonitoring()
         }
-    }, [isRecording, isPaused, startTimer])
+    }, [isRecording, isPaused, startTimer, setupAutoStopTimeouts, startAudioLevelMonitoring])
 
     const toggleRecording = useCallback(() => {
         if (isRecording) {
@@ -211,34 +360,25 @@ export default function VoiceRecorder() {
             setCanDownload(true)
             stopTimer()
             stopSizeTracking()
+            clearAutoStopTimeouts()
+
+            // Arrêter le monitoring audio
+            if (animationFrameRef.current) {
+                cancelAnimationFrame(animationFrameRef.current)
+                animationFrameRef.current = null
+            }
+            if (audioContextRef.current) {
+                audioContextRef.current.close()
+                audioContextRef.current = null
+            }
+            analyserRef.current = null
+            setAudioLevel(0)
+            setNoAudioDetected(false)
 
             // Arrêter le stream
             mediaRecorderRef.current.stream?.getTracks().forEach(track => track.stop())
         }
-    }, [isRecording, isPaused, stopTimer, stopSizeTracking])
-
-    // Fonction pour calculer la taille approximative pendant l'enregistrement
-    const updateFileSize = useCallback(() => {
-        if (audioChunksRef.current.length > 0) {
-            const currentSize = audioChunksRef.current.reduce((total, chunk) => total + chunk.size, 0)
-            setFileSize(currentSize)
-            setFileSizeFormatted(formatFileSize(currentSize))
-
-            // Arrêt automatique si on approche de la limite
-            if (currentSize >= MAX_FILE_SIZE_BYTES) {
-                console.log(`🛑 Arrêt automatique: limite de ${MAX_FILE_SIZE_MB}Mo atteinte (${formatFileSize(currentSize)})`)
-                finalStopRecording()
-                setStatus(`Arrêt automatique - Limite de ${MAX_FILE_SIZE_MB}Mo atteinte`)
-            }
-        }
-    }, [formatFileSize, MAX_FILE_SIZE_BYTES, MAX_FILE_SIZE_MB, finalStopRecording])
-
-    // Démarrer le suivi de taille
-    const startSizeTracking = useCallback(() => {
-        setFileSize(0)
-        setFileSizeFormatted('0 KB')
-        sizeCheckIntervalRef.current = setInterval(updateFileSize, 1000) // Vérifier toutes les secondes
-    }, [updateFileSize])
+    }, [isRecording, isPaused, stopTimer, stopSizeTracking, clearAutoStopTimeouts])
 
     const downloadRecording = useCallback(() => {
         if (recordedAudioRef.current) {
@@ -274,6 +414,40 @@ export default function VoiceRecorder() {
         if (event.target) {
             event.target.value = ''
         }
+    }, [])
+
+    const handleDocUpload = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+        const files = event.target.files
+        if (files) {
+            const validTypes = ['application/pdf', 'image/png', 'image/jpeg', 'image/gif', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet']
+            const validExtensions = /\.(pdf|png|jpg|jpeg|gif|docx|xlsx)$/i
+
+            Array.from(files).forEach(file => {
+                // Valider le type
+                if (!validTypes.includes(file.type) && !validExtensions.test(file.name)) {
+                    setError(`Fichier non supporté: ${file.name}. Utilisez PDF, PNG, JPG, GIF, DOCX ou XLSX.`)
+                    return
+                }
+
+                // Vérifier la limite (5 documents max)
+                setAttachedDocuments(prev => {
+                    if (prev.length >= 5) {
+                        setError('Limite de 5 documents atteinte')
+                        return prev
+                    }
+                    return [...prev, file]
+                })
+            })
+        }
+
+        // Reset du input
+        if (event.target) {
+            event.target.value = ''
+        }
+    }, [])
+
+    const removeDocument = useCallback((index: number) => {
+        setAttachedDocuments(prev => prev.filter((_, i) => i !== index))
     }, [])
 
     // Détecter si le contenu ressemble à du Markdown
@@ -477,6 +651,14 @@ export default function VoiceRecorder() {
             const existingText = transcript || ''
             formData.append('existingText', existingText)
 
+            // Ajouter les documents attachés
+            if (attachedDocuments.length > 0) {
+                formData.append('documentCount', attachedDocuments.length.toString())
+                attachedDocuments.forEach((doc, index) => {
+                    formData.append(`document_${index}`, doc)
+                })
+            }
+
             const response = await fetch('/api/transcribe', {
                 method: 'POST',
                 body: formData,
@@ -654,7 +836,24 @@ export default function VoiceRecorder() {
                     className={styles.floatingIconButton}
                     title="Téléverser un fichier audio"
                 >
-                    <FaUpload />
+                    <FaFileAudio />
+                </button>
+
+                {/* Document Upload Button */}
+                <input
+                    ref={docInputRef}
+                    type="file"
+                    accept=".pdf,.png,.jpg,.jpeg,.gif,.docx,.xlsx"
+                    onChange={handleDocUpload}
+                    multiple
+                    style={{display: 'none'}}
+                />
+                <button
+                    onClick={() => docInputRef.current?.click()}
+                    className={styles.floatingIconButton}
+                    title="Joindre un document"
+                >
+                    <FaPaperclip />
                 </button>
 
                 {/* Download Button */}
@@ -701,6 +900,16 @@ export default function VoiceRecorder() {
                             ⏹️
                         </button>
                     )}
+
+                    {/* Barre de niveau audio */}
+                    {(isRecording || isPaused) && (
+                        <div className={styles.audioLevelContainer}>
+                            <div
+                                className={styles.audioLevelBar}
+                                style={{height: `${audioLevel}%`}}
+                            ></div>
+                        </div>
+                    )}
                 </div>
 
                 <div className={styles.statusArea}>
@@ -713,6 +922,36 @@ export default function VoiceRecorder() {
 
                     {(isRecording || isPaused) && (
                         <div className={styles.timer}>{timer}</div>
+                    )}
+
+                    {timeWarning && (
+                        <div className={styles.timeWarning}>
+                            ⏱️ Limite de 15 minutes approche
+                        </div>
+                    )}
+
+                    {noAudioDetected && (
+                        <div className={styles.audioWarning}>
+                            🔇 Aucun son détecté
+                        </div>
+                    )}
+
+                    {/* Documents attachés */}
+                    {attachedDocuments.length > 0 && (
+                        <div className={styles.attachedDocs}>
+                            {attachedDocuments.map((doc, index) => (
+                                <div key={index} className={styles.docChip}>
+                                    <span>📎 {doc.name}</span>
+                                    <button
+                                        className={styles.docChipRemove}
+                                        onClick={() => removeDocument(index)}
+                                        title="Retirer ce document"
+                                    >
+                                        ✕
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
                     )}
 
                     {/* Barre de progression et taille fichier */}
@@ -1053,10 +1292,80 @@ export default function VoiceRecorder() {
 
             <footer className={styles.footer}>
                 <div className={styles.footerContent}>
-                    🧪 <strong>VoixLà</strong> est une expérimentation en cours... mais on peut déjà se dire que c'est la
-                    meilleure app de la <strong>DicTech</strong> ! 🚀
+                    <div>🧪 <strong>VoixLà</strong> est une expérimentation en cours... mais on peut déjà se dire que c'est la meilleure app de la <strong>DicTech</strong> ! 🚀</div>
+                    <div style={{marginTop: '15px', display: 'flex', gap: '12px', justifyContent: 'center', alignItems: 'center', flexWrap: 'wrap'}}>
+                        <span className={styles.privacyBadge}>🔐 Données anonymes</span>
+                        <button
+                            onClick={() => setShowAboutModal(true)}
+                            className={styles.aboutButton}
+                        >
+                            ℹ️ À propos
+                        </button>
+                    </div>
                 </div>
             </footer>
+
+            {/* Modal À propos */}
+            {showAboutModal && (
+                <div
+                    className={styles.modalOverlay}
+                    onClick={() => setShowAboutModal(false)}
+                >
+                    <div
+                        className={styles.modalContent}
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <button
+                            className={styles.modalClose}
+                            onClick={() => setShowAboutModal(false)}
+                            aria-label="Fermer"
+                        >
+                            ✕
+                        </button>
+
+                        <h2>À propos de VoixLà</h2>
+
+                        <div style={{textAlign: 'left', lineHeight: '1.6', color: '#555'}}>
+                            <p>
+                                <strong>VoixLà</strong> est une application simple et puissante de transcription vocale
+                                alimentée par l'IA Gemini. Elle transforme vos memos vocaux en texte structuré prêt à être
+                                utilisé, que ce soit pour des emails, des articles, des rapports, ou plus encore.
+                            </p>
+
+                            <h3 style={{marginTop: '20px', marginBottom: '10px', color: '#333'}}>🔒 Confidentialité</h3>
+                            <ul style={{paddingLeft: '20px', margin: '10px 0'}}>
+                                <li>Aucune donnée n'est stockée sur notre serveur</li>
+                                <li>Aucun enregistrement audio ou transcription conservé</li>
+                                <li>Vous restez entièrement maître de vos données</li>
+                                <li>Utilisation 100% anonyme</li>
+                            </ul>
+
+                            <h3 style={{marginTop: '20px', marginBottom: '10px', color: '#333'}}>👤 Créateur</h3>
+                            <p>Créé par <strong>Frédéric Passaniti</strong></p>
+
+                            <h3 style={{marginTop: '20px', marginBottom: '10px', color: '#333'}}>🔗 Liens utiles</h3>
+                            <div className={styles.modalLinks}>
+                                <a href="https://www.linkedin.com/in/frederic-passaniti/" target="_blank" rel="noopener noreferrer">
+                                    💼 LinkedIn
+                                </a>
+                                <a href="https://github.com/fpassaniti/" target="_blank" rel="noopener noreferrer">
+                                    🐙 GitHub
+                                </a>
+                                <a href="https://github.com/fpassaniti/voixla" target="_blank" rel="noopener noreferrer">
+                                    📦 Code source
+                                </a>
+                                <a href="https://buymeacoffee.com/fpassx" target="_blank" rel="noopener noreferrer">
+                                    ☕ Buy me a coffee
+                                </a>
+                            </div>
+
+                            <p style={{marginTop: '20px', fontSize: '0.9rem', color: '#999', textAlign: 'center'}}>
+                                ✨ Open source et fait avec ❤️
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     )
 }

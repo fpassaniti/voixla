@@ -202,6 +202,39 @@
     margin-bottom: 20px;
 }
 
+.timeWarning {
+    font-size: 0.9rem;
+    color: #ff9800;
+    font-weight: 600;
+    margin-bottom: 15px;
+    animation: pulse 1s infinite;
+}
+
+.audioLevelContainer {
+    width: 12px;
+    height: 80px;
+    background: #e9ecef;
+    border-radius: 8px;
+    overflow: hidden;
+    display: flex;
+    align-items: flex-end;
+    margin-left: 15px;
+}
+
+.audioLevelBar {
+    width: 100%;
+    background: linear-gradient(180deg, #28a745, #20c997);
+    transition: height 0.1s ease;
+    border-radius: 8px;
+}
+
+.audioWarning {
+    font-size: 0.9rem;
+    color: #ff9800;
+    font-weight: 600;
+    margin-bottom: 15px;
+}
+
 .transcriptSection {
     width: 100%;
     margin-top: 30px;
@@ -1329,4 +1362,174 @@
     .complementText {
         font-size: 0.85rem;
     }
+}
+
+/* Styles pour la modale À propos et le badge confidentialité */
+.privacyBadge {
+    display: inline-block;
+    padding: 6px 14px;
+    background: linear-gradient(135deg, #27ae60, #2ecc71);
+    color: white;
+    border-radius: 20px;
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.aboutButton {
+    background: linear-gradient(135deg, #667eea, #764ba2);
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 20px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 600;
+    transition: all 0.3s ease;
+}
+
+.aboutButton:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+}
+
+.modalOverlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.modalContent {
+    background: white;
+    border-radius: 12px;
+    padding: 30px;
+    max-width: 500px;
+    width: 90%;
+    max-height: 80vh;
+    overflow-y: auto;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+    position: relative;
+}
+
+.modalContent h2 {
+    color: #333;
+    margin-top: 0;
+    margin-bottom: 20px;
+    font-size: 1.5rem;
+}
+
+.modalContent h3 {
+    color: #667eea;
+    font-size: 1.1rem;
+}
+
+.modalContent ul {
+    list-style: none;
+    padding-left: 0;
+}
+
+.modalContent li {
+    padding: 6px 0;
+    color: #555;
+}
+
+.modalContent li:before {
+    content: "✓ ";
+    color: #27ae60;
+    font-weight: bold;
+    margin-right: 8px;
+}
+
+.modalLinks {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 10px 0;
+}
+
+.modalLinks a {
+    display: inline-block;
+    padding: 10px 14px;
+    background: #f8f9fa;
+    color: #667eea;
+    text-decoration: none;
+    border-radius: 6px;
+    font-weight: 600;
+    font-size: 0.9rem;
+    transition: all 0.3s ease;
+    border: 1px solid #e9ecef;
+}
+
+.modalLinks a:hover {
+    background: #667eea;
+    color: white;
+    border-color: #667eea;
+}
+
+.modalClose {
+    position: absolute;
+    top: 15px;
+    right: 15px;
+    background: none;
+    border: none;
+    font-size: 1.5rem;
+    cursor: pointer;
+    color: #999;
+    transition: color 0.2s ease;
+}
+
+.modalClose:hover {
+    color: #333;
+}
+
+/* Styles pour les pièces jointes */
+.attachedDocs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 15px;
+    justify-content: center;
+}
+
+.docChip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: #f0f4ff;
+    border: 1px solid #667eea;
+    border-radius: 20px;
+    font-size: 0.85rem;
+    color: #333;
+    max-width: 250px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.docChip span {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.docChipRemove {
+    background: none;
+    border: none;
+    color: #e74c3c;
+    cursor: pointer;
+    font-size: 0.9rem;
+    font-weight: bold;
+    padding: 0 4px;
+    transition: color 0.2s ease;
+    flex-shrink: 0;
+}
+
+.docChipRemove:hover {
+    color: #c0392b;
 }
