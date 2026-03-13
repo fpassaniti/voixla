@@ -49,6 +49,10 @@ export default function VoiceRecorder() {
     const [showAboutModal, setShowAboutModal] = useState(false)
     const [attachedDocuments, setAttachedDocuments] = useState<File[]>([])
 
+    // Ref pour toujours disposer de la version la plus récente des documents/documents & texte de base dans les callbacks asynchrones
+    const attachedDocumentsRef = useRef<File[]>([])
+    const baseTranscriptRef = useRef<string>('')
+
     const mediaRecorderRef = useRef<MediaRecorder | null>(null)
     const audioChunksRef = useRef<Blob[]>([])
     const recordedAudioRef = useRef<Blob | null>(null)
@@ -271,7 +275,6 @@ export default function VoiceRecorder() {
             setStatus('Enregistrement en cours... Cliquez pour arrêter')
             setError('')
             setRetryError('')
-            setAttachedDocuments([])
             setShowRetryButton(false)
             remainingTimeRef.current = 0
             silenceCounterRef.current = 0
@@ -449,8 +452,12 @@ export default function VoiceRecorder() {
 
             Array.from(files).forEach(file => {
                 // Valider le type
-                if (!validTypes.includes(file.type) && !validExtensions.test(file.name)) {
+                const isMimeTypeValid = validTypes.includes(file.type)
+                const isExtensionValid = validExtensions.test(file.name)
+
+                if (!isMimeTypeValid && !isExtensionValid) {
                     setError(`Fichier non supporté: ${file.name}. Utilisez PDF, PNG, JPG, GIF, DOCX ou XLSX.`)
+                    console.warn(`❌ Fichier rejeté: ${file.name}`)
                     return
                 }
 
@@ -460,7 +467,9 @@ export default function VoiceRecorder() {
                         setError('Limite de 5 documents atteinte')
                         return prev
                     }
-                    return [...prev, file]
+                    const updated = [...prev, file]
+                    attachedDocumentsRef.current = updated
+                    return updated
                 })
             })
         }
@@ -472,7 +481,11 @@ export default function VoiceRecorder() {
     }, [])
 
     const removeDocument = useCallback((index: number) => {
-        setAttachedDocuments(prev => prev.filter((_, i) => i !== index))
+        setAttachedDocuments(prev => {
+            const updated = prev.filter((_, i) => i !== index)
+            attachedDocumentsRef.current = updated
+            return updated
+        })
     }, [])
 
     // Détecter si le contenu ressemble à du Markdown
@@ -672,14 +685,19 @@ export default function VoiceRecorder() {
 
             formData.append('audio', recordedAudioRef.current, 'recording.webm')
 
-            // Toujours envoyer le transcript existant (vide ou non)
-            const existingText = transcript || ''
+            const currentTranscript = transcript || ''
+            const baseText =
+                (currentTranscript && currentTranscript.trim().length > 0)
+                    ? currentTranscript
+                    : (baseTranscriptRef.current || '')
+            const existingText = baseText || ''
             formData.append('existingText', existingText)
 
-            // Ajouter les documents attachés
-            if (attachedDocuments.length > 0) {
-                formData.append('documentCount', attachedDocuments.length.toString())
-                attachedDocuments.forEach((doc, index) => {
+            // Ajouter les documents attachés (toujours depuis la ref pour éviter un state obsolète)
+            const docsToSend = attachedDocumentsRef.current || []
+            if (docsToSend.length > 0) {
+                formData.append('documentCount', docsToSend.length.toString())
+                docsToSend.forEach((doc, index) => {
                     formData.append(`document_${index}`, doc)
                 })
             }
@@ -708,7 +726,11 @@ export default function VoiceRecorder() {
             }
 
             if (response.ok && result.success) {
-                setTranscript(result.content)
+                const cleanedResult = (result.content || '').trim()
+
+                // Mettre à jour le transcript affiché et le transcript de base pour les prochains mémos
+                setTranscript(cleanedResult)
+                baseTranscriptRef.current = cleanedResult
                 setHasInteracted(true)
                 setShowExamples(false)
                 setIsEditing(false)
@@ -719,10 +741,11 @@ export default function VoiceRecorder() {
                 setStatus(`${existingText ? 'Transcription complétée' : 'Transcription terminée'}. Compléter votre transcription avec un nouvel enregistrement`)
 
                 // Sauvegarder dans l'historique
-                saveToHistory(result.content, 'flash', result.cost)
+                saveToHistory(cleanedResult, 'flash', result.cost)
 
-                // Vider les documents attachés après envoi
+                // Vider les documents attachés après envoi (state + ref)
                 setAttachedDocuments([])
+                attachedDocumentsRef.current = []
 
             } else {
                 throw new Error(result.error || `Erreur HTTP: ${response.status}`)
@@ -835,6 +858,7 @@ export default function VoiceRecorder() {
     // Commencer une nouvelle transcription (effacer l'existante)
     const startNewTranscription = useCallback(() => {
         setTranscript('')
+        baseTranscriptRef.current = ''
         setEditBuffer('')
         setHasInteracted(false)
         setShowExamples(true)
@@ -982,20 +1006,20 @@ export default function VoiceRecorder() {
                         </div>
                     )}
 
-                    {/* Barre de progression et taille fichier */}
-                    {(isRecording || isPaused) && fileSize > 0 && (
+                    {/* Barre de progression de la durée */}
+                    {(isRecording || isPaused) && (
                         <div className={styles.fileSizeSection}>
                             <div className={styles.fileSizeText}>
-                                📁 {fileSizeFormatted} / {MAX_FILE_SIZE_MB} MB
+                                ⏱️ {timer} / 15:00
                             </div>
                             <div className={styles.progressBarContainer}>
                                 <div
-                                    className={`${styles.progressBar} ${fileSize >= MAX_FILE_SIZE_BYTES * 0.8 ? styles.warning : ''} ${fileSize >= MAX_FILE_SIZE_BYTES * 0.95 ? styles.danger : ''}`}
-                                    style={{width: `${Math.min((fileSize / MAX_FILE_SIZE_BYTES) * 100, 100)}%`}}
+                                    className={`${styles.progressBar} ${timeWarning ? styles.warning : ''}`}
+                                    style={{width: `${Math.min((parseInt(timer.split(':')[0]) * 60 + parseInt(timer.split(':')[1])) / MAX_RECORDING_DURATION_SECONDS * 100, 100)}%`}}
                                 />
                             </div>
                             <div className={styles.progressText}>
-                                {Math.round((fileSize / MAX_FILE_SIZE_BYTES) * 100)}%
+                                {Math.round((parseInt(timer.split(':')[0]) * 60 + parseInt(timer.split(':')[1])) / MAX_RECORDING_DURATION_SECONDS * 100)}%
                             </div>
                         </div>
                     )}

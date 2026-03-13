@@ -61,12 +61,16 @@ export async function POST(request: NextRequest) {
     // Extraire et valider les documents
     const documentCountRaw = formData.get('documentCount')
     const documentCount = documentCountRaw ? parseInt(String(documentCountRaw)) : 0
+
     const documents: Array<{type: 'inline' | 'text', name: string, mimeType?: string, data?: string, content?: string}> = []
     let totalSize = audioFile.size
 
     for (let i = 0; i < documentCount; i++) {
       const docFile = formData.get(`document_${i}`) as File
-      if (!docFile) continue
+      if (!docFile) {
+        console.warn(`⚠️ document_${i} est null/undefined`)
+        continue
+      }
 
       totalSize += docFile.size
       if (totalSize > maxTotalSize) {
@@ -109,8 +113,10 @@ export async function POST(request: NextRequest) {
       else if (fileName.endsWith('.xlsx') && ExcelJS) {
         try {
           const arrayBuffer = await docFile.arrayBuffer()
+
           const workbook = new ExcelJS.Workbook()
           await workbook.xlsx.load(arrayBuffer)
+
           let sheetText = ''
           workbook.worksheets.forEach((worksheet: any) => {
             sheetText += `\n=== ${worksheet.name} ===\n`
@@ -122,14 +128,17 @@ export async function POST(request: NextRequest) {
               sheetText += rowValues + '\n'
             })
           })
+
           documents.push({
             type: 'text',
             name: docFile.name,
             content: sheetText
           })
         } catch (e) {
-          console.warn(`Erreur extraction XLSX ${docFile.name}:`, e)
+          console.error(`❌ Erreur extraction XLSX ${docFile.name}:`, e)
         }
+      } else if (fileName.endsWith('.xlsx')) {
+        console.warn(`⚠️ XLSX détecté mais ExcelJS non disponible: ${docFile.name}`)
       }
     }
 
@@ -172,6 +181,7 @@ ${doc.content}
 
     if (existingText && existingText.trim()) {
       // Mode complément
+      console.log(`📝 Mode: COMPLÉMENT`)
       prompt = `Tu es un assistant de rédaction expert. Tu as déjà produit ce texte :
 
 ==================
@@ -204,6 +214,7 @@ IMPORTANT :
 - Garde tout le contenu original sauf si explicitement demandé de le changer`
     } else {
       // Mode création classique
+      console.log(`📝 Mode: CRÉATION`)
       prompt = `Tu es un assistant de rédaction expert. Dans ce fichier audio, la personne te donne un brief oral contenant :
 
 CONSIGNES possibles :
@@ -230,12 +241,18 @@ TON RÔLE :
 IMPORTANT : Réponds uniquement avec le texte final rédigé, prêt à être utilisé. Si les consignes sont imprécises, fais de ton mieux pour interpréter l'intention et rédige un contenu de qualité.`
     }
 
+    // Log pour vérifier que les documents sont dans le prompt
+    const hasDocumentsInPrompt = prompt.includes('DOCUMENTS DE RÉFÉRENCE JOINTS')
+    console.log(`📝 Prompt contient les documents: ${hasDocumentsInPrompt}`)
+    console.log(`📝 Longueur du prompt: ${prompt.length} caractères`)
+
     // Utiliser uniquement Gemini Flash
     const modelName = 'gemini-3-flash-preview'
     const model = genAI.getGenerativeModel({ model: modelName })
 
     // Construire les parts pour generateContent
     const contentParts: any[] = [prompt, audioPart]
+    console.log(`📤 Envoi à Gemini: prompt + audio + ${documents.filter(d => d.type === 'inline').length} document(s) inline`)
 
     // Ajouter les documents inline (PDF et images)
     documents.forEach(doc => {
