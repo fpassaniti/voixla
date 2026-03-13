@@ -41,7 +41,7 @@
 - Document support:
   - PDF/images: sent as inline data to Gemini
   - DOCX: text extracted via mammoth
-  - XLSX: CSV extracted via xlsx
+  - XLSX: CSV extracted via exceljs (actively maintained, secure)
   - Max 5 documents per request
 - Two prompt modes:
   1. **New**: Brief oral input + optional documents → formatted text

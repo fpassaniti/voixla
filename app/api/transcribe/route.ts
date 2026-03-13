@@ -3,7 +3,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai'
 
 // Dynamic imports for document processing
 let mammoth: any = null
-let XLSX: any = null
+let ExcelJS: any = null
 
 async function initDocumentProcessors() {
   if (!mammoth) {
@@ -13,11 +13,11 @@ async function initDocumentProcessors() {
       console.warn('mammoth not installed')
     }
   }
-  if (!XLSX) {
+  if (!ExcelJS) {
     try {
-      XLSX = await import('xlsx')
+      ExcelJS = await import('exceljs')
     } catch (e) {
-      console.warn('xlsx not installed')
+      console.warn('exceljs not installed')
     }
   }
 }
@@ -106,14 +106,21 @@ export async function POST(request: NextRequest) {
         }
       }
       // Extraire texte des XLSX
-      else if (fileName.endsWith('.xlsx') && XLSX) {
+      else if (fileName.endsWith('.xlsx') && ExcelJS) {
         try {
           const arrayBuffer = await docFile.arrayBuffer()
-          const workbook = XLSX.read(arrayBuffer, { type: 'array' })
+          const workbook = new ExcelJS.Workbook()
+          await workbook.xlsx.load(arrayBuffer)
           let sheetText = ''
-          workbook.SheetNames.forEach((sheetName: string) => {
-            const csv = XLSX.utils.sheet_to_csv(workbook.Sheets[sheetName])
-            sheetText += `\n=== ${sheetName} ===\n${csv}`
+          workbook.worksheets.forEach((worksheet: any) => {
+            sheetText += `\n=== ${worksheet.name} ===\n`
+            worksheet.eachRow((row: any) => {
+              const rowValues = row.values
+                .slice(1) // Skip first element (row index)
+                .map((val: any) => val?.toString() || '')
+                .join(',')
+              sheetText += rowValues + '\n'
+            })
           })
           documents.push({
             type: 'text',
