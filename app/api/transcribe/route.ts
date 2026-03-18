@@ -46,17 +46,8 @@ export async function POST(request: NextRequest) {
     // Initialize document processors
     await initDocumentProcessors()
 
-    // Validation de la taille - audio max 4MB (déjà géré côté client), total max 30MB (limite Cloud Run)
+    // Validation de la taille - total max 30MB (limite Cloud Run)
     const maxTotalSize = 30 * 1024 * 1024 // 30MB total
-    const maxAudioSize = 4 * 1024 * 1024 // 4MB pour l'audio
-
-    if (audioFile.size > maxAudioSize) {
-      clearTimeout(timeout)
-      return NextResponse.json(
-        { error: `Fichier audio trop volumineux (${Math.round(audioFile.size / 1024 / 1024)}MB). Maximum: 4MB` },
-        { status: 413 }
-      )
-    }
 
     // Extraire et valider les documents
     const documentCountRaw = formData.get('documentCount')

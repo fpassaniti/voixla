@@ -37,7 +37,7 @@
 - Accepts: audio file (FormData) + optional existingText + optional documents
 - Uses Gemini Flash for all transcriptions
 - Retry logic: 503/overloaded/timeout errors retry after 3s
-- Timeout: 10min per request, 30MB max total (4MB audio + documents)
+- Timeout: 10min per request, 30MB max total
 - Document support:
   - PDF/images: sent as inline data to Gemini
   - DOCX: text extracted via mammoth
