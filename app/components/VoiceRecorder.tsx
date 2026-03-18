@@ -71,8 +71,6 @@ export default function VoiceRecorder() {
     const silenceCounterRef = useRef<number>(0)
 
     // Constantes pour les limites
-    const MAX_FILE_SIZE_MB = 4 // Limite à 4Mo pour rester sous la limite Vercel de 4.5Mo
-    const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
     const MAX_RECORDING_DURATION_SECONDS = 15 * 60 // 15 minutes
 
     // Fonction pour formatter la taille de fichier
@@ -208,14 +206,8 @@ export default function VoiceRecorder() {
             const currentSize = audioChunksRef.current.reduce((total, chunk) => total + chunk.size, 0)
             setFileSize(currentSize)
             setFileSizeFormatted(formatFileSize(currentSize))
-
-            // Arrêt automatique si on approche de la limite
-            if (currentSize >= MAX_FILE_SIZE_BYTES) {
-                console.log(`🛑 Arrêt automatique: limite de ${MAX_FILE_SIZE_MB}Mo atteinte (${formatFileSize(currentSize)})`)
-                setStatus(`Arrêt automatique - Limite de ${MAX_FILE_SIZE_MB}Mo atteinte`)
-            }
         }
-    }, [formatFileSize, MAX_FILE_SIZE_BYTES, MAX_FILE_SIZE_MB])
+    }, [formatFileSize])
 
     // Démarrer le suivi de taille
     const startSizeTracking = useCallback(() => {
