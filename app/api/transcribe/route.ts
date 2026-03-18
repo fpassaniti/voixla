@@ -137,10 +137,17 @@ export async function POST(request: NextRequest) {
     const arrayBuffer = await audioFile.arrayBuffer()
     const audioData = Buffer.from(arrayBuffer).toString('base64')
 
+    // Déterminer le MIME type (le navigateur peut ne pas le détecter correctement)
+    let audioMimeType = audioFile.type
+    if (!audioMimeType || !audioMimeType.startsWith('audio/')) {
+      // Par défaut, utiliser audio/webm (format standard envoyé par MediaRecorder)
+      audioMimeType = 'audio/webm'
+    }
+
     const audioPart = {
       inlineData: {
         data: audioData,
-        mimeType: audioFile.type
+        mimeType: audioMimeType
       }
     }
 
@@ -243,7 +250,7 @@ IMPORTANT : Réponds uniquement avec le texte final rédigé, prêt à être uti
 
     // Construire les parts pour generateContent
     const contentParts: any[] = [prompt, audioPart]
-    console.log(`📤 Envoi à Gemini: prompt + audio + ${documents.filter(d => d.type === 'inline').length} document(s) inline`)
+    console.log(`📤 Envoi à Gemini: prompt + audio (${Math.round(audioFile.size / 1024)}KB, ${audioMimeType}) + ${documents.filter(d => d.type === 'inline').length} document(s) inline`)
 
     // Ajouter les documents inline (PDF et images)
     documents.forEach(doc => {
