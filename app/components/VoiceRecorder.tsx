@@ -107,12 +107,64 @@ export default function VoiceRecorder() {
     }
   }, []);
 
+  const startTimerInterval = () => {
+    if (timerIntervalRef.current) {
+      clearInterval(timerIntervalRef.current);
+    }
+    timerIntervalRef.current = setInterval(() => {
+      setTimer((t) => {
+        const newTime = t + 1;
+        if (newTime >= 14 * 60) {
+          setTimeWarning(true);
+        }
+        if (newTime >= 15 * 60) {
+          handleStop();
+        }
+        return newTime;
+      });
+    }, 1000);
+  };
+
+  const startLevelInterval = () => {
+    if (levelIntervalRef.current) {
+      clearInterval(levelIntervalRef.current);
+    }
+    if (!analyserRef.current) return;
+    levelIntervalRef.current = setInterval(() => {
+      const dataArray = new Uint8Array(analyserRef.current!.frequencyBinCount);
+      analyserRef.current!.getByteFrequencyData(dataArray);
+      const average = dataArray.reduce((a, b) => a + b) / dataArray.length / 255;
+      setAudioLevel(Math.max(0.1, average));
+      if (average < 0.02) {
+        setNoAudioDetected(true);
+      } else {
+        setNoAudioDetected(false);
+      }
+    }, 100);
+  };
+
+  const stopIntervals = () => {
+    if (timerIntervalRef.current) {
+      clearInterval(timerIntervalRef.current);
+      timerIntervalRef.current = null;
+    }
+    if (levelIntervalRef.current) {
+      clearInterval(levelIntervalRef.current);
+      levelIntervalRef.current = null;
+    }
+  };
+
   const handleRecord = async () => {
     if (isRecording || isPaused) {
-      if (!isRecording && isPaused) {
+      if (isPaused) {
+        mediaRecorderRef.current?.resume();
+        startTimerInterval();
+        startLevelInterval();
         setIsRecording(true);
         setIsPaused(false);
-      } else if (isRecording) {
+      } else {
+        mediaRecorderRef.current?.pause();
+        stopIntervals();
         setIsRecording(false);
         setIsPaused(true);
       }
@@ -150,30 +202,8 @@ export default function VoiceRecorder() {
       setTimeWarning(false);
       setNoAudioDetected(false);
 
-      timerIntervalRef.current = setInterval(() => {
-        setTimer((t) => {
-          const newTime = t + 1;
-          if (newTime >= 14 * 60) {
-            setTimeWarning(true);
-          }
-          if (newTime >= 15 * 60) {
-            handleStop();
-          }
-          return newTime;
-        });
-      }, 1000);
-
-      levelIntervalRef.current = setInterval(() => {
-        const dataArray = new Uint8Array(analyser.frequencyBinCount);
-        analyser.getByteFrequencyData(dataArray);
-        const average = dataArray.reduce((a, b) => a + b) / dataArray.length / 255;
-        setAudioLevel(Math.max(0.1, average));
-        if (average < 0.02) {
-          setNoAudioDetected(true);
-        } else {
-          setNoAudioDetected(false);
-        }
-      }, 100);
+      startTimerInterval();
+      startLevelInterval();
     } catch (err) {
       setError('Impossible d\'accéder au microphone');
       console.error(err);
@@ -187,12 +217,7 @@ export default function VoiceRecorder() {
       mediaRecorderRef.current.stop();
     }
 
-    if (timerIntervalRef.current) {
-      clearInterval(timerIntervalRef.current);
-    }
-    if (levelIntervalRef.current) {
-      clearInterval(levelIntervalRef.current);
-    }
+    stopIntervals();
 
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
