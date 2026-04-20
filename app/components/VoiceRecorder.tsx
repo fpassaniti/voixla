@@ -385,7 +385,12 @@ export default function VoiceRecorder() {
 
       {/* Header */}
       <div className={styles.header}>
-        <div className={styles.logo}>
+        <button
+          type="button"
+          className={styles.logo}
+          onClick={handleNew}
+          title="Nouveau mémo"
+        >
           <div>
             <div className={styles.logoBadge}>
               № 042 ·{' '}
@@ -397,7 +402,7 @@ export default function VoiceRecorder() {
               Voix<span className={styles.logoAccent}>Là</span>
             </div>
           </div>
-        </div>
+        </button>
         <div className={styles.headerPills}>
           <button
             className={`${styles.iconPill} ${showHistoryDrawer ? styles.active : ''}`}
