@@ -1,1415 +1,802 @@
-'use client'
+'use client';
 
-import {useState, useRef, useCallback, useEffect} from 'react'
-import ReactMarkdown from 'react-markdown'
-import { FaFileAudio, FaPaperclip } from "react-icons/fa";
-import { FaDownload } from "react-icons/fa6";
-import styles from '../page.module.css'
-
-interface CostData {
-    totalEUR: number
-    totalUSD: number
-    inputTokens: number
-    outputTokens: number
-    model: string
-}
+import React, { useRef, useState, useEffect } from 'react';
+import styles from '../page.module.css';
+import {
+  IconMic,
+  IconPause,
+  IconPlay,
+  IconStop,
+  IconCheck,
+  IconX,
+  IconPlus,
+  IconPaperclip,
+  IconUpload,
+  IconDownload,
+  IconCopy,
+  IconPencil,
+  IconSparkle,
+  IconInfo,
+  IconHistory,
+  IconShield,
+  IconTrash,
+} from './Icons';
+import { Waveform } from './Waveform';
+import ReactMarkdown from 'react-markdown';
 
 interface HistoryItem {
-    id: string
-    timestamp: string
-    content: string
-    model: string
-    cost?: CostData
-    preview: string // Premier extrait de 100 caractères pour l'affichage
+  id: string;
+  timestamp: string;
+  content: string;
+  model: string;
+  cost: { totalEUR: number; totalUSD: number };
+  preview: string;
+  duration: string;
+  wordCount: number;
+  date: string;
 }
 
+const EXAMPLES = [
+  {
+    tag: 'Brief',
+    text: '« Rédige un email pour reporter la réunion de demain, ton professionnel… »',
+  },
+  {
+    tag: 'Note',
+    text: '« Résume les trois points clés de la discussion d\'hier avec l\'équipe design… »',
+  },
+  {
+    tag: 'Idée',
+    text: '« Article de blog sur la productivité vocale, 500 mots, ton décontracté… »',
+  },
+];
+
+const COLOPHON_SPECS = [
+  ['Moteur', 'Gemini Flash'],
+  ['Langue', 'Français'],
+  ['Limite', '15 minutes / enregistrement'],
+  ['Formats', 'WAV, MP3, WEBM, M4A'],
+  ['Pièces jointes', 'PDF, images, DOCX, XLSX'],
+];
+
 export default function VoiceRecorder() {
-    const [isRecording, setIsRecording] = useState(false)
-    const [isPaused, setIsPaused] = useState(false)
-    const [status, setStatus] = useState('Cliquez pour commencer l\'enregistrement')
-    const [transcript, setTranscript] = useState('')
-    const [error, setError] = useState('')
-    const [retryError, setRetryError] = useState('')
-    const [costData, setCostData] = useState<CostData | null>(null)
-    const [isProcessing, setIsProcessing] = useState(false)
-    const [timer, setTimer] = useState('00:00')
-    const [showRetryButton, setShowRetryButton] = useState(false)
-    const [canDownload, setCanDownload] = useState(false)
-    const [fileSize, setFileSize] = useState(0)
-    const [fileSizeFormatted, setFileSizeFormatted] = useState('0 KB')
-    const [history, setHistory] = useState<HistoryItem[]>([])
-    const [expandedHistoryItems, setExpandedHistoryItems] = useState<Set<string>>(new Set())
-    const [isEditing, setIsEditing] = useState(false)
-    const [editBuffer, setEditBuffer] = useState('')
-    const [showExamples, setShowExamples] = useState(true)
-    const [hasInteracted, setHasInteracted] = useState(false)
-    const [timeWarning, setTimeWarning] = useState(false)
-    const [audioLevel, setAudioLevel] = useState(0)
-    const [noAudioDetected, setNoAudioDetected] = useState(false)
-    const [showAboutModal, setShowAboutModal] = useState(false)
-    const [attachedDocuments, setAttachedDocuments] = useState<File[]>([])
+  const [isRecording, setIsRecording] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
+  const [timer, setTimer] = useState(0);
+  const [audioLevel, setAudioLevel] = useState(0.5);
+  const [status, setStatus] = useState('');
+  const [transcript, setTranscript] = useState('');
+  const [isEditing, setIsEditing] = useState(false);
+  const [editBuffer, setEditBuffer] = useState('');
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [costData, setCostData] = useState<{
+    totalEUR: number;
+    totalUSD: number;
+    inputTokens: number;
+    outputTokens: number;
+    model: string;
+  } | null>(null);
+  const [error, setError] = useState('');
+  const [retryError, setRetryError] = useState('');
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [showHistoryDrawer, setShowHistoryDrawer] = useState(false);
+  const [showAboutModal, setShowAboutModal] = useState(false);
+  const [attachedDocuments, setAttachedDocuments] = useState<File[]>([]);
+  const [timeWarning, setTimeWarning] = useState(false);
+  const [noAudioDetected, setNoAudioDetected] = useState(false);
 
-    // Ref pour toujours disposer de la version la plus récente des documents/documents & texte de base dans les callbacks asynchrones
-    const attachedDocumentsRef = useRef<File[]>([])
-    const baseTranscriptRef = useRef<string>('')
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const recordedAudioRef = useRef<Blob | null>(null);
+  const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const levelIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const attachFileInputRef = useRef<HTMLInputElement>(null);
+  const importAudioInputRef = useRef<HTMLInputElement>(null);
 
-    const mediaRecorderRef = useRef<MediaRecorder | null>(null)
-    const audioChunksRef = useRef<Blob[]>([])
-    const recordedAudioRef = useRef<Blob | null>(null)
-    const startTimeRef = useRef<number>(0)
-    const pausedTimeRef = useRef<number>(0)
-    const timerIntervalRef = useRef<NodeJS.Timeout | null>(null)
-    const fileInputRef = useRef<HTMLInputElement | null>(null)
-    const docInputRef = useRef<HTMLInputElement | null>(null)
-    const sizeCheckIntervalRef = useRef<NodeJS.Timeout | null>(null)
-    const warningTimeoutRef = useRef<NodeJS.Timeout | null>(null)
-    const autoStopTimeoutRef = useRef<NodeJS.Timeout | null>(null)
-    const remainingTimeRef = useRef<number>(0)
-    const audioContextRef = useRef<AudioContext | null>(null)
-    const analyserRef = useRef<AnalyserNode | null>(null)
-    const animationFrameRef = useRef<number | null>(null)
-    const silenceCounterRef = useRef<number>(0)
+  // Load history from localStorage
+  useEffect(() => {
+    const saved = localStorage.getItem('voixla-history');
+    if (saved) {
+      try {
+        setHistory(JSON.parse(saved));
+      } catch (e) {
+        console.error('Failed to parse history:', e);
+      }
+    }
+  }, []);
 
-    // Constantes pour les limites
-    const MAX_RECORDING_DURATION_SECONDS = 15 * 60 // 15 minutes
+  const handleRecord = async () => {
+    if (isRecording || isPaused) {
+      if (!isRecording && isPaused) {
+        setIsRecording(true);
+        setIsPaused(false);
+      } else if (isRecording) {
+        setIsRecording(false);
+        setIsPaused(true);
+      }
+      return;
+    }
 
-    // Fonction pour formatter la taille de fichier
-    const formatFileSize = useCallback((bytes: number) => {
-        if (bytes === 0) return '0 B'
-        const k = 1024
-        const sizes = ['B', 'KB', 'MB', 'GB']
-        const i = Math.floor(Math.log(bytes) / Math.log(k))
-        return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`
-    }, [])
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
 
-    // Arrêter le suivi de taille
-    const stopSizeTracking = useCallback(() => {
-        if (sizeCheckIntervalRef.current) {
-            clearInterval(sizeCheckIntervalRef.current)
-            sizeCheckIntervalRef.current = null
-        }
-    }, [])
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      audioContextRef.current = audioContext;
+      const source = audioContext.createMediaStreamSource(stream);
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      analyserRef.current = analyser;
+      source.connect(analyser);
 
-    // Configurer les timeouts pour l'arrêt automatique à 15 minutes
-    const setupAutoStopTimeouts = useCallback((delaySeconds: number) => {
-        // Nettoyer les timeouts précédents
-        if (warningTimeoutRef.current) clearTimeout(warningTimeoutRef.current)
-        if (autoStopTimeoutRef.current) clearTimeout(autoStopTimeoutRef.current)
+      const mediaRecorder = new MediaRecorder(stream, {
+        mimeType: 'audio/webm;codecs=opus',
+      });
+      mediaRecorderRef.current = mediaRecorder;
+      recordedAudioRef.current = null;
 
-        const warningTime = 14 * 60 // 14 minutes en secondes
-        const totalTime = MAX_RECORDING_DURATION_SECONDS
+      const chunks: Blob[] = [];
+      mediaRecorder.ondataavailable = (e) => chunks.push(e.data);
+      mediaRecorder.onstop = () => {
+        recordedAudioRef.current = new Blob(chunks, { type: 'audio/webm' });
+      };
 
-        // Avertissement à 14 minutes
-        if (delaySeconds <= warningTime) {
-            const warningDelay = (warningTime - delaySeconds) * 1000
-            warningTimeoutRef.current = setTimeout(() => {
-                setTimeWarning(true)
-            }, warningDelay)
-        }
+      mediaRecorder.start();
+      setIsRecording(true);
+      setIsPaused(false);
+      setTimer(0);
+      setTimeWarning(false);
+      setNoAudioDetected(false);
 
-        // Arrêt automatique à 15 minutes
-        if (delaySeconds <= totalTime) {
-            const stopDelay = (totalTime - delaySeconds) * 1000
-            autoStopTimeoutRef.current = setTimeout(() => {
-                finalStopRecording()
-                setStatus('Arrêt automatique - Limite de 15 minutes atteinte')
-            }, stopDelay)
-        }
-    }, [MAX_RECORDING_DURATION_SECONDS])
+      timerIntervalRef.current = setInterval(() => {
+        setTimer((t) => {
+          const newTime = t + 1;
+          if (newTime >= 14 * 60) {
+            setTimeWarning(true);
+          }
+          if (newTime >= 15 * 60) {
+            handleStop();
+          }
+          return newTime;
+        });
+      }, 1000);
 
-    // Nettoyer les timeouts d'arrêt automatique
-    const clearAutoStopTimeouts = useCallback(() => {
-        if (warningTimeoutRef.current) {
-            clearTimeout(warningTimeoutRef.current)
-            warningTimeoutRef.current = null
-        }
-        if (autoStopTimeoutRef.current) {
-            clearTimeout(autoStopTimeoutRef.current)
-            autoStopTimeoutRef.current = null
-        }
-        setTimeWarning(false)
-    }, [])
-
-    // Fonction pour monitorer le niveau audio
-    const startAudioLevelMonitoring = useCallback(() => {
-        if (!analyserRef.current) return
-
-        let frameCount = 0
-        const frequencyData = new Uint8Array(analyserRef.current.frequencyBinCount)
-
-        const updateAudioLevel = () => {
-            // Vérifier si on est toujours en enregistrement (vérifier directement le mediaRecorder plutôt que le state)
-            if (!analyserRef.current || !mediaRecorderRef.current || mediaRecorderRef.current.state === 'inactive') return
-
-            analyserRef.current.getByteFrequencyData(frequencyData)
-            // Calculer la moyenne mais ignorer les valeurs très basses (bruit de fond)
-            const relevantData = frequencyData.filter(v => v > 10)
-            const average = relevantData.length > 0
-                ? relevantData.reduce((a, b) => a + b) / relevantData.length
-                : 0
-            // Appliquer une courbe exponentielle pour plus de sensibilité (surtout pour les faibles volumes)
-            const level = Math.round(Math.pow((average / 255), 0.5) * 100)
-
-            // Throttle les updates du state (toutes les 3 frames)
-            frameCount++
-            if (frameCount % 3 === 0) {
-                setAudioLevel(level)
-
-                // Détecter le silence (durée ~3 secondes à ~60fps = ~180 frames)
-                if (level < 5) {
-                    silenceCounterRef.current++
-                    if (silenceCounterRef.current > 180) {
-                        setNoAudioDetected(true)
-                    }
-                } else {
-                    silenceCounterRef.current = 0
-                    setNoAudioDetected(false)
-                }
-            }
-
-            animationFrameRef.current = requestAnimationFrame(updateAudioLevel)
-        }
-
-        animationFrameRef.current = requestAnimationFrame(updateAudioLevel)
-    }, [])
-
-    const startTimer = useCallback(() => {
-        startTimeRef.current = Date.now() - pausedTimeRef.current
-        timerIntervalRef.current = setInterval(() => {
-            const elapsed = Math.floor((Date.now() - startTimeRef.current) / 1000)
-            const minutes = Math.floor(elapsed / 60).toString().padStart(2, '0')
-            const seconds = (elapsed % 60).toString().padStart(2, '0')
-            setTimer(`${minutes}:${seconds}`)
-        }, 1000)
-    }, [])
-
-    const pauseTimer = useCallback(() => {
-        if (timerIntervalRef.current) {
-            clearInterval(timerIntervalRef.current)
-            timerIntervalRef.current = null
-            pausedTimeRef.current = Date.now() - startTimeRef.current
-        }
-    }, [])
-
-    const stopTimer = useCallback(() => {
-        if (timerIntervalRef.current) {
-            clearInterval(timerIntervalRef.current)
-            timerIntervalRef.current = null
-        }
-        pausedTimeRef.current = 0
-        setTimer('00:00')
-    }, [])
-
-    // Fonction pour calculer la taille approximative pendant l'enregistrement
-    const updateFileSize = useCallback(() => {
-        if (audioChunksRef.current.length > 0) {
-            const currentSize = audioChunksRef.current.reduce((total, chunk) => total + chunk.size, 0)
-            setFileSize(currentSize)
-            setFileSizeFormatted(formatFileSize(currentSize))
-        }
-    }, [formatFileSize])
-
-    // Démarrer le suivi de taille
-    const startSizeTracking = useCallback(() => {
-        setFileSize(0)
-        setFileSizeFormatted('0 KB')
-        sizeCheckIntervalRef.current = setInterval(updateFileSize, 1000) // Vérifier toutes les secondes
-    }, [updateFileSize])
-
-    const startRecording = useCallback(async () => {
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    sampleRate: 16000 // 16kHz suffit pour la voix (vs 44.1kHz CD)
-                }
-            })
-
-            // Tenter différents formats pour optimiser la compression
-            let mimeType = 'audio/webm;codecs=opus'
-            let mediaRecorderOptions: MediaRecorderOptions = {mimeType}
-
-            // Essayer avec bitrate spécifique si supporté
-            if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
-                mediaRecorderOptions = {
-                    mimeType: 'audio/webm;codecs=opus',
-                    audioBitsPerSecond: 32000 // 32 kbps (vs ~128 kbps par défaut)
-                }
-            }
-
-            mediaRecorderRef.current = new MediaRecorder(stream, mediaRecorderOptions)
-
-            audioChunksRef.current = []
-
-            mediaRecorderRef.current.ondataavailable = (event) => {
-                if (event.data.size > 0) {
-                    audioChunksRef.current.push(event.data)
-                }
-            }
-
-            mediaRecorderRef.current.onstop = async () => {
-                const audioBlob = new Blob(audioChunksRef.current, {type: 'audio/webm'})
-
-                if (audioBlob.size === 0) {
-                    setError('Enregistrement vide')
-                    setStatus('Cliquez pour commencer l\'enregistrement')
-                    return
-                }
-
-                recordedAudioRef.current = audioBlob
-                // Traiter automatiquement avec Flash
-                await processAudio()
-            }
-
-            mediaRecorderRef.current.start(100)
-            setIsRecording(true)
-            setStatus('Enregistrement en cours... Cliquez pour arrêter')
-            setError('')
-            setRetryError('')
-            setShowRetryButton(false)
-            remainingTimeRef.current = 0
-            silenceCounterRef.current = 0
-            setAudioLevel(0)
-            setNoAudioDetected(false)
-            startTimer()
-            startSizeTracking()
-            setupAutoStopTimeouts(0)
-
-            // Créer l'AudioContext et AnalyserNode pour le monitoring du niveau audio
-            try {
-                const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
-                audioContextRef.current = audioContext
-
-                // Reprendre l'AudioContext (peut être suspendu ou non selon le navigateur)
-                // Appeler resume() inconditionnellement - c'est une no-op si déjà running
-                if (audioContext.state !== 'closed') {
-                    await audioContext.resume()
-                }
-
-                const analyser = audioContext.createAnalyser()
-                analyser.fftSize = 2048  // Augmenter de 256 à 2048 pour meilleure précision
-                analyserRef.current = analyser
-
-                // Connecter la source audio à l'analyser
-                const source = audioContext.createMediaStreamSource(stream)
-                source.connect(analyser)
-
-                // Créer un GainNode silencieux pour que le graphe audio soit valide
-                // (l'analyser doit avoir une destination, mais on ne veut pas d'écho du micro)
-                const silentGain = audioContext.createGain()
-                silentGain.gain.value = 0
-                analyser.connect(silentGain)
-                silentGain.connect(audioContext.destination)
-
-                // Petit délai pour que le flux audio soit prêt et que le state soit synchronisé
-                await new Promise(resolve => setTimeout(resolve, 100))
-                startAudioLevelMonitoring()
-            } catch (e) {
-                console.warn('Impossible de créer l\'AudioContext pour le monitoring:', e)
-            }
-
-        } catch (error) {
-            console.error('Erreur d\'accès au microphone:', error)
-            setError('Impossible d\'accéder au microphone. Vérifiez les permissions.')
-        }
-    }, [startTimer, startSizeTracking, setupAutoStopTimeouts, startAudioLevelMonitoring])
-
-    const stopRecording = useCallback(() => {
-        if (mediaRecorderRef.current && isRecording) {
-            mediaRecorderRef.current.stop()
-            setIsRecording(false)
-            stopTimer()
-
-            // Arrêter le stream
-            mediaRecorderRef.current.stream?.getTracks().forEach(track => track.stop())
-        }
-    }, [isRecording, stopTimer])
-
-    const pauseRecording = useCallback(() => {
-        if (mediaRecorderRef.current && isRecording && !isPaused) {
-            mediaRecorderRef.current.pause()
-            setIsPaused(true)
-            setStatus('Enregistrement en pause - Cliquez pour reprendre')
-            pauseTimer()
-            // Pause les timeouts d'arrêt automatique
-            if (warningTimeoutRef.current) clearTimeout(warningTimeoutRef.current)
-            if (autoStopTimeoutRef.current) clearTimeout(autoStopTimeoutRef.current)
-            // Suspend l'AudioContext
-            if (audioContextRef.current) audioContextRef.current.suspend()
-            // Arrêter l'animation frame
-            if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current)
-        }
-    }, [isRecording, isPaused, pauseTimer])
-
-    const resumeRecording = useCallback(async () => {
-        if (mediaRecorderRef.current && isRecording && isPaused) {
-            mediaRecorderRef.current.resume()
-            setIsPaused(false)
-            setStatus('Enregistrement en cours... Cliquez pour arrêter')
-            startTimer()
-            // Recalculer le temps écoulé et remettre en place les timeouts
-            const elapsedSeconds = Math.floor(pausedTimeRef.current / 1000)
-            setupAutoStopTimeouts(elapsedSeconds)
-            // Resume l'AudioContext et attendre sa reprise
-            if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-                await audioContextRef.current.resume()
-            }
-            // Redémarrer le monitoring audio
-            startAudioLevelMonitoring()
-        }
-    }, [isRecording, isPaused, startTimer, setupAutoStopTimeouts, startAudioLevelMonitoring])
-
-    const toggleRecording = useCallback(() => {
-        if (isRecording) {
-            if (isPaused) {
-                resumeRecording()
-            } else {
-                pauseRecording()
-            }
+      levelIntervalRef.current = setInterval(() => {
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        analyser.getByteFrequencyData(dataArray);
+        const average = dataArray.reduce((a, b) => a + b) / dataArray.length / 255;
+        setAudioLevel(Math.max(0.1, average));
+        if (average < 0.02) {
+          setNoAudioDetected(true);
         } else {
-            startRecording()
+          setNoAudioDetected(false);
         }
-    }, [isRecording, isPaused, startRecording, pauseRecording, resumeRecording])
-
-    const finalStopRecording = useCallback(() => {
-        if (mediaRecorderRef.current && (isRecording || isPaused)) {
-            mediaRecorderRef.current.stop()
-            setIsRecording(false)
-            setIsPaused(false)
-            setCanDownload(true)
-            stopTimer()
-            stopSizeTracking()
-            clearAutoStopTimeouts()
-
-            // Arrêter le monitoring audio
-            if (animationFrameRef.current) {
-                cancelAnimationFrame(animationFrameRef.current)
-                animationFrameRef.current = null
-            }
-            if (audioContextRef.current) {
-                audioContextRef.current.close()
-                audioContextRef.current = null
-            }
-            analyserRef.current = null
-            setAudioLevel(0)
-            setNoAudioDetected(false)
-
-            // Arrêter le stream
-            mediaRecorderRef.current.stream?.getTracks().forEach(track => track.stop())
-        }
-    }, [isRecording, isPaused, stopTimer, stopSizeTracking, clearAutoStopTimeouts])
-
-    const downloadRecording = useCallback(() => {
-        if (recordedAudioRef.current) {
-            const url = URL.createObjectURL(recordedAudioRef.current)
-            const a = document.createElement('a')
-            a.href = url
-            a.download = `memo-vocal-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.webm`
-            document.body.appendChild(a)
-            a.click()
-            document.body.removeChild(a)
-            URL.revokeObjectURL(url)
-        }
-    }, [])
-
-    const handleFileUpload = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
-        const file = event.target.files?.[0]
-        if (file) {
-            // Vérifier le type de fichier
-            const validTypes = ['audio/wav', 'audio/mp3', 'audio/mpeg', 'audio/webm', 'audio/ogg', 'audio/m4a', 'audio/aac']
-            if (!validTypes.includes(file.type) && !file.name.match(/\.(wav|mp3|webm|ogg|m4a|aac)$/i)) {
-                setError('Type de fichier non supporté. Utilisez WAV, MP3, WEBM, OGG, M4A ou AAC.')
-                return
-            }
-
-            recordedAudioRef.current = file
-            setCanDownload(false)
-            setError('')
-            setRetryError('')
-            // Traiter automatiquement avec Flash
-            await processAudio()
-        }
-        // Reset du input pour permettre de re-upload le même fichier
-        if (event.target) {
-            event.target.value = ''
-        }
-    }, [])
-
-    const handleDocUpload = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
-        const files = event.target.files
-        if (files) {
-            const validTypes = ['application/pdf', 'image/png', 'image/jpeg', 'image/gif', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet']
-            const validExtensions = /\.(pdf|png|jpg|jpeg|gif|docx|xlsx)$/i
-
-            Array.from(files).forEach(file => {
-                // Valider le type
-                const isMimeTypeValid = validTypes.includes(file.type)
-                const isExtensionValid = validExtensions.test(file.name)
-
-                if (!isMimeTypeValid && !isExtensionValid) {
-                    setError(`Fichier non supporté: ${file.name}. Utilisez PDF, PNG, JPG, GIF, DOCX ou XLSX.`)
-                    console.warn(`❌ Fichier rejeté: ${file.name}`)
-                    return
-                }
-
-                // Vérifier la limite (5 documents max)
-                setAttachedDocuments(prev => {
-                    if (prev.length >= 5) {
-                        setError('Limite de 5 documents atteinte')
-                        return prev
-                    }
-                    const updated = [...prev, file]
-                    attachedDocumentsRef.current = updated
-                    return updated
-                })
-            })
-        }
-
-        // Reset du input
-        if (event.target) {
-            event.target.value = ''
-        }
-    }, [])
-
-    const removeDocument = useCallback((index: number) => {
-        setAttachedDocuments(prev => {
-            const updated = prev.filter((_, i) => i !== index)
-            attachedDocumentsRef.current = updated
-            return updated
-        })
-    }, [])
-
-    // Détecter si le contenu ressemble à du Markdown
-    const isMarkdown = useCallback((text: string) => {
-        const markdownIndicators = [
-            /^#{1,6}\s+/m,     // Titres
-            /\*{1,2}.*\*{1,2}/, // Gras/italique
-            /^[-*+]\s+/m,      // Listes
-            /^\d+\.\s+/m,      // Listes numérotées
-            /```[\s\S]*?```/,  // Code blocks
-            /`[^`]+`/,         // Code inline
-            /\[.*?\]\(.*?\)/   // Liens
-        ]
-        return markdownIndicators.some(pattern => pattern.test(text))
-    }, [])
-
-
-    // Copier le markdown brut (pour Notion)
-    const copyMarkdown = useCallback(async () => {
-        if (!transcript) return
-
-        try {
-            await navigator.clipboard.writeText(transcript)
-        } catch (error) {
-            console.error('Erreur de copie markdown:', error)
-            setError('Impossible de copier dans le presse-papier')
-        }
-    }, [transcript])
-
-    // Copier le texte formaté directement depuis la zone d'affichage
-    const copyFormatted = useCallback(async () => {
-        console.log('🔄 copyFormatted - Début')
-        if (!transcript) {
-            console.log('❌ Pas de transcript')
-            return
-        }
-
-        try {
-            let targetContainer: HTMLElement | null = null
-
-            if (isMarkdown(transcript)) {
-                // Chercher avec le module CSS
-                targetContainer = document.querySelector(`[class*="markdown"]`) as HTMLElement
-                if (!targetContainer) {
-                    // Fallback: chercher directement dans le transcriptBox
-                    targetContainer = document.querySelector(`[class*="transcriptBox"] [class*="markdown"]`) as HTMLElement
-                }
-            } else {
-                targetContainer = document.querySelector(`[class*="plainText"]`) as HTMLElement
-            }
-
-            if (targetContainer) {
-                // Sélectionner le contenu de la zone d'affichage
-                const selection = window.getSelection()
-                const range = document.createRange()
-                range.selectNodeContents(targetContainer)
-                selection?.removeAllRanges()
-                selection?.addRange(range)
-
-                // Utiliser execCommand pour copier le formatage riche
-                const success = document.execCommand('copy')
-                selection?.removeAllRanges()
-
-                if (!success) {
-                    throw new Error('execCommand failed')
-                }
-                console.log('✅ Copie réussie avec formatage')
-            } else {
-                console.log('❌ Container non trouvé, fallback vers clipboard.writeText')
-                // Fallback si la zone n'est pas trouvée
-                await navigator.clipboard.writeText(transcript)
-            }
-
-        } catch (error) {
-            console.error('❌ Erreur de copie formatée:', error)
-            // Fallback vers le markdown brut
-            try {
-                await navigator.clipboard.writeText(transcript)
-                console.log('📋 Fallback vers markdown brut réussi')
-            } catch (fallbackError) {
-                console.error('❌ Fallback échoué aussi:', fallbackError)
-                setError('Impossible de copier dans le presse-papier')
-            }
-        }
-    }, [transcript, isMarkdown])
-
-    // === FONCTIONS DE GESTION DE L'HISTORIQUE ===
-
-    // Charger l'historique depuis localStorage
-    useEffect(() => {
-        try {
-            const savedHistory = localStorage.getItem('voixla_history')
-            if (savedHistory) {
-                const parsedHistory: HistoryItem[] = JSON.parse(savedHistory)
-                setHistory(parsedHistory.slice(0, 50)) // Limiter à 50 éléments
-            }
-        } catch (e) {
-            console.warn('Erreur lors du chargement de l\'historique:', e)
-        }
-    }, [])
-
-    // Sauvegarder une nouvelle transcription dans l'historique
-    const saveToHistory = useCallback((content: string, model: string, cost?: CostData) => {
-        if (!content || content.trim().length === 0) return
-
-        const newItem: HistoryItem = {
-            id: Date.now().toString(),
-            timestamp: new Date().toISOString(),
-            content: content.trim(),
-            model,
-            cost,
-            preview: content.trim().substring(0, 100).replace(/\n/g, ' ')
-        }
-
-        setHistory(prevHistory => {
-            const newHistory = [newItem, ...prevHistory].slice(0, 50) // Garder les 50 plus récents
-
-            try {
-                localStorage.setItem('voixla_history', JSON.stringify(newHistory))
-                console.log(`💾 Transcription sauvegardée dans l'historique (${newHistory.length} éléments)`)
-            } catch (e) {
-                console.warn('Erreur lors de la sauvegarde:', e)
-            }
-
-            return newHistory
-        })
-    }, [])
-
-    // Mettre à jour le dernier élément de l'historique avec le contenu corrigé
-    const updateLastHistoryItem = useCallback((newContent: string) => {
-        if (!newContent || newContent.trim().length === 0) return
-
-        setHistory(prevHistory => {
-            if (prevHistory.length === 0) return prevHistory
-
-            const updatedHistory = [...prevHistory]
-            const lastItem = updatedHistory[0]
-
-            updatedHistory[0] = {
-                ...lastItem,
-                content: newContent.trim(),
-                preview: newContent.trim().substring(0, 100).replace(/\n/g, ' ')
-            }
-
-            try {
-                localStorage.setItem('voixla_history', JSON.stringify(updatedHistory))
-                console.log('💾 Historique mis à jour avec les corrections')
-            } catch (e) {
-                console.warn('Erreur lors de la sauvegarde:', e)
-            }
-
-            return updatedHistory
-        })
-    }, [])
-
-    // Valider l'édition du transcript
-    const handleValidation = useCallback((contentToValidate?: string) => {
-        const trimmedContent = (contentToValidate || editBuffer).trim()
-
-        if (trimmedContent !== transcript) {
-            // Contenu a été modifié (peut être vide)
-            setTranscript(trimmedContent)
-
-            // Mettre à jour l'historique SEULEMENT si contenu non-vide ET correspond au dernier item
-            if (trimmedContent && history.length > 0 && history[0].content === transcript) {
-                updateLastHistoryItem(trimmedContent)
-                console.log('✅ Transcription IA éditée et sauvegardée')
-            } else if (!trimmedContent) {
-                console.log('ℹ️ Transcript vidé')
-            } else {
-                console.log('ℹ️ Texte manuel ou nouveau - pas de mise à jour historique')
-            }
-        }
-
-        setIsEditing(false)
-        setEditBuffer('')
-    }, [editBuffer, transcript, history, updateLastHistoryItem])
-
-    const processAudio = useCallback(async () => {
-        if (!recordedAudioRef.current) return
-
-        setIsProcessing(true)
-        setStatus('Transcription en cours...')
-        setError('')
-        setRetryError('')
-        setShowRetryButton(false)
-
-        let result: any
-        try {
-            const formData = new FormData()
-
-            // Validation côté client de la taille
-            const fileSizeMB = recordedAudioRef.current.size / (1024 * 1024)
-            if (fileSizeMB > 50) {
-                throw new Error(`Fichier trop volumineux (${Math.round(fileSizeMB)}MB). Maximum: 50MB`)
-            }
-
-            formData.append('audio', recordedAudioRef.current, 'recording.webm')
-
-            const currentTranscript = transcript || ''
-            const baseText =
-                (currentTranscript && currentTranscript.trim().length > 0)
-                    ? currentTranscript
-                    : (baseTranscriptRef.current || '')
-            const existingText = baseText || ''
-            formData.append('existingText', existingText)
-
-            // Ajouter les documents attachés (toujours depuis la ref pour éviter un state obsolète)
-            const docsToSend = attachedDocumentsRef.current || []
-            if (docsToSend.length > 0) {
-                formData.append('documentCount', docsToSend.length.toString())
-                docsToSend.forEach((doc, index) => {
-                    formData.append(`document_${index}`, doc)
-                })
-            }
-
-            const response = await fetch('/api/transcribe', {
-                method: 'POST',
-                body: formData,
-                // Timeout côté client (5 minutes)
-                signal: AbortSignal.timeout(5 * 60 * 1000)
-            })
-
-            const contentType = response.headers.get('content-type')
-
-            if (contentType && contentType.includes('application/json')) {
-                const textResponse = await response.text()
-                try {
-                    result = JSON.parse(textResponse)
-                } catch (jsonError) {
-                    console.error('Erreur parsing JSON:', textResponse.substring(0, 200))
-                    throw new Error('Réponse malformée du serveur')
-                }
-            } else {
-                // Si ce n'est pas du JSON, c'est probablement une erreur HTML
-                const errorText = await response.text()
-                throw new Error(`Erreur serveur: ${response.status} ${response.statusText}`)
-            }
-
-            if (response.ok && result.success) {
-                const cleanedResult = (result.content || '').trim()
-
-                // Mettre à jour le transcript affiché et le transcript de base pour les prochains mémos
-                setTranscript(cleanedResult)
-                baseTranscriptRef.current = cleanedResult
-                setHasInteracted(true)
-                setShowExamples(false)
-                setIsEditing(false)
-                setEditBuffer('')
-                if (result.cost) {
-                    setCostData(result.cost)
-                }
-                setStatus(`${existingText ? 'Transcription complétée' : 'Transcription terminée'}. Compléter votre transcription avec un nouvel enregistrement`)
-
-                // Sauvegarder dans l'historique
-                saveToHistory(cleanedResult, 'flash', result.cost)
-
-                // Vider les documents attachés après envoi (state + ref)
-                setAttachedDocuments([])
-                attachedDocumentsRef.current = []
-
-            } else {
-                throw new Error(result.error || `Erreur HTTP: ${response.status}`)
-            }
-
-        } catch (error: any) {
-            console.error('Erreur:', error)
-
-            // Erreurs spécifiquement connues comme retryables
-            const isKnownRetryableError = error.message.includes('503') ||
-                error.message.includes('overloaded') ||
-                error.message.includes('500') ||
-                error.message.includes('429') ||
-                error.message.includes('502') ||
-                error.message.includes('504') ||
-                error.message.includes('timeout') ||
-                error.message.includes('network')
-
-            // Erreurs définitivement non-retryables
-            const isNonRetryableError = error.message.includes('401') ||
-                error.message.includes('403') ||
-                error.message.includes('invalid') ||
-                error.message.includes('not found') ||
-                error.message.includes('permission') ||
-                error.message.includes('unauthorized') ||
-                error.message.includes('forbidden')
-
-            if (isKnownRetryableError) {
-                setRetryError(`Gemini Flash est surchargé. Vous pouvez ressayer dans quelques instants.`)
-                setShowRetryButton(true)
-                // En cas d'erreur, garder le transcript existant
-                setCostData(null)
-            } else if (isNonRetryableError) {
-                // Erreurs définitives - pas de retry
-                setError('Erreur lors de la transcription: ' + error.message)
-                setCostData(null)
-            } else {
-                // Erreurs inconnues - proposer un retry par défaut
-                setRetryError(`Une erreur inattendue s'est produite: ${error.message}. Vous pouvez essayer de relancer la transcription.`)
-                setShowRetryButton(true)
-                setCostData(null)
-            }
-        } finally {
-            setIsProcessing(false)
-            if (!retryError && !error) {
-                // Changer le message selon s'il y a déjà une transcription ou non
-                const newStatus = result && result.content ? 'Compléter votre transcription avec un nouvel enregistrement' : 'Cliquez pour commencer l\'enregistrement'
-                setStatus(newStatus)
-            }
-        }
-    }, [transcript, saveToHistory])
-
-    const retryLastRequest = useCallback(async () => {
-        if (!recordedAudioRef.current) return
-
-        setShowRetryButton(false)
-        await new Promise(resolve => setTimeout(resolve, 2000))
-        await processAudio()
-    }, [processAudio])
-
-    // Supprimer un élément de l'historique
-    const deleteFromHistory = useCallback((id: string) => {
-        setHistory(prevHistory => {
-            const newHistory = prevHistory.filter(item => item.id !== id)
-
-            try {
-                localStorage.setItem('voixla_history', JSON.stringify(newHistory))
-            } catch (e) {
-                console.warn('Erreur lors de la suppression:', e)
-            }
-
-            return newHistory
-        })
-    }, [])
-
-    // Vider tout l'historique
-    const clearHistory = useCallback(() => {
-        setHistory([])
-        setExpandedHistoryItems(new Set())
-        try {
-            localStorage.removeItem('voixla_history')
-        } catch (e) {
-            console.warn('Erreur lors du vidage:', e)
-        }
-    }, [])
-
-    // Restaurer une transcription de l'historique
-    const restoreFromHistory = useCallback((item: HistoryItem) => {
-        setTranscript(item.content)
-        setCostData(item.cost || null)
-        setStatus('Transcription restaurée depuis l\'historique')
-
-        // Scroll vers le haut pour voir la transcription restaurée
-        window.scrollTo({top: 0, behavior: 'smooth'})
-    }, [])
-
-    // Toggle expansion d'un élément de l'historique
-    const toggleHistoryExpansion = useCallback((id: string) => {
-        setExpandedHistoryItems(prev => {
-            const newSet = new Set(prev)
-            if (newSet.has(id)) {
-                newSet.delete(id)
-            } else {
-                newSet.add(id)
-            }
-            return newSet
-        })
-    }, [])
-
-    // Commencer une nouvelle transcription (effacer l'existante)
-    const startNewTranscription = useCallback(() => {
-        setTranscript('')
-        baseTranscriptRef.current = ''
-        setEditBuffer('')
-        setHasInteracted(false)
-        setShowExamples(true)
-        setCostData(null)
-        setError('')
-        setRetryError('')
-        setShowRetryButton(false)
-        setStatus('Cliquez pour commencer l\'enregistrement')
-    }, [])
-
-    return (
-        <div className={styles.container}>
-            <h1>🎙️ VoixLà</h1>
-
-            {/* Boutons flottants en haut à droite */}
-            <div className={styles.floatingButtonsContainer}>
-                {/* Upload Button */}
-                <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="audio/*,.wav,.mp3,.webm,.ogg,.m4a,.aac"
-                    onChange={handleFileUpload}
-                    style={{display: 'none'}}
-                />
-                <button
-                    onClick={() => fileInputRef.current?.click()}
-                    className={styles.floatingIconButton}
-                    title="Téléverser un fichier audio"
-                >
-                    <FaFileAudio />
-                </button>
-
-                {/* Document Upload Button */}
-                <input
-                    ref={docInputRef}
-                    type="file"
-                    accept=".pdf,.png,.jpg,.jpeg,.gif,.docx,.xlsx"
-                    onChange={handleDocUpload}
-                    multiple
-                    style={{display: 'none'}}
-                />
-                <button
-                    onClick={() => docInputRef.current?.click()}
-                    className={styles.floatingIconButton}
-                    title="Joindre un document"
-                >
-                    <FaPaperclip />
-                </button>
-
-                {/* Download Button */}
-                {canDownload && recordedAudioRef.current && (
-                    <button
-                        onClick={downloadRecording}
-                        className={styles.floatingIconButton}
-                        title="Télécharger l'enregistrement"
-                    >
-                        <FaDownload />
-                    </button>
-                )}
-
-                {/* New Transcription Button */}
-                {transcript && !isRecording && !isPaused && !isProcessing && (
-                    <button
-                        onClick={startNewTranscription}
-                        className={styles.floatingIconButton}
-                        title="Nouvelle transcription"
-                    >
-                        🆕
-                    </button>
-                )}
+      }, 100);
+    } catch (err) {
+      setError('Impossible d\'accéder au microphone');
+      console.error(err);
+    }
+  };
+
+  const handleStop = () => {
+    if (!isRecording && !isPaused) return;
+
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
+
+    if (timerIntervalRef.current) {
+      clearInterval(timerIntervalRef.current);
+    }
+    if (levelIntervalRef.current) {
+      clearInterval(levelIntervalRef.current);
+    }
+
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+    }
+
+    setIsRecording(false);
+    setIsPaused(false);
+    setTimeout(() => transcribeAudio(), 100);
+  };
+
+  const transcribeAudio = async () => {
+    if (!recordedAudioRef.current) {
+      setError('Aucun audio enregistré');
+      return;
+    }
+
+    setIsProcessing(true);
+    setError('');
+    setRetryError('');
+
+    try {
+      const formData = new FormData();
+      formData.append('audio', recordedAudioRef.current, 'audio.webm');
+
+      const textToExtend = editBuffer || transcript;
+      if (textToExtend) {
+        formData.append('existingText', textToExtend);
+      }
+
+      if (attachedDocuments.length > 0) {
+        formData.append('documentCount', String(attachedDocuments.length));
+        attachedDocuments.forEach((doc, i) => {
+          formData.append(`document_${i}`, doc);
+        });
+      }
+
+      const response = await fetch('/api/transcribe', {
+        method: 'POST',
+        body: formData,
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        const newTranscript = transcript && editBuffer ? editBuffer : data.content;
+        setTranscript(newTranscript);
+        setCostData(data.cost);
+
+        const historyItem: HistoryItem = {
+          id: Date.now().toString(),
+          timestamp: new Date().toISOString(),
+          content: newTranscript,
+          model: data.cost.model || 'Gemini Flash',
+          cost: {
+            totalEUR: data.cost.totalEUR,
+            totalUSD: data.cost.totalUSD,
+          },
+          preview: newTranscript.substring(0, 100),
+          duration: `${Math.floor(timer / 60)}:${String(timer % 60).padStart(2, '0')}`,
+          wordCount: newTranscript.split(/\s+/).length,
+          date: new Date().toLocaleDateString('fr-FR', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+          }),
+        };
+
+        const updatedHistory = [historyItem, ...history].slice(0, 100);
+        setHistory(updatedHistory);
+        localStorage.setItem('voixla-history', JSON.stringify(updatedHistory));
+
+        setIsEditing(false);
+        setEditBuffer('');
+        setAttachedDocuments([]);
+      } else {
+        setError(data.error || 'Erreur lors de la transcription');
+        setRetryError(data.error || 'Erreur lors de la transcription');
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Erreur inconnue';
+      setError(errorMsg);
+      setRetryError(errorMsg);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleNew = () => {
+    setTranscript('');
+    setCostData(null);
+    setTimer(0);
+    setIsEditing(false);
+    setEditBuffer('');
+    recordedAudioRef.current = null;
+    setAttachedDocuments([]);
+  };
+
+  const handleAttachFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length > 0) {
+      setAttachedDocuments([...attachedDocuments, ...files].slice(0, 5));
+    }
+    if (attachFileInputRef.current) {
+      attachFileInputRef.current.value = '';
+    }
+  };
+
+  const handleImportAudio = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      recordedAudioRef.current = file;
+      setTimeout(() => transcribeAudio(), 100);
+    }
+    if (importAudioInputRef.current) {
+      importAudioInputRef.current.value = '';
+    }
+  };
+
+  const handleDownloadAudio = () => {
+    if (!recordedAudioRef.current) return;
+    const url = URL.createObjectURL(recordedAudioRef.current);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `voixla-audio-${Date.now()}.webm`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleDownload = () => {
+    if (!transcript) return;
+    const element = document.createElement('a');
+    element.setAttribute(
+      'href',
+      `data:text/plain;charset=utf-8,${encodeURIComponent(transcript)}`
+    );
+    element.setAttribute('download', `voixla-${Date.now()}.txt`);
+    element.style.display = 'none';
+    document.body.appendChild(element);
+    element.click();
+    document.body.removeChild(element);
+  };
+
+  const handleCopyMarkdown = () => {
+    navigator.clipboard.writeText(transcript).catch(() => {
+      setError('Impossible de copier');
+    });
+  };
+
+  const handleCopyPlain = () => {
+    const plain = transcript
+      .replace(/^#+ /gm, '')
+      .replace(/\*\*/g, '')
+      .replace(/\*/g, '')
+      .replace(/^[-*\d.] /gm, '');
+    navigator.clipboard.writeText(plain).catch(() => {
+      setError('Impossible de copier');
+    });
+  };
+
+  const handleRestoreHistory = (item: HistoryItem) => {
+    setTranscript(item.content);
+    setCostData(item.cost as any);
+    recordedAudioRef.current = null;
+    setAttachedDocuments([]);
+    setShowHistoryDrawer(false);
+  };
+
+  const handleDeleteHistory = (id: string) => {
+    const updated = history.filter((h) => h.id !== id);
+    setHistory(updated);
+    localStorage.setItem('voixla-history', JSON.stringify(updated));
+  };
+
+  const isMarkdown = (text: string) => {
+    return /^[#*\-]|^\d+\.|[*_]|##/m.test(text);
+  };
+
+  const fmtTime = (s: number) =>
+    `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+
+  const showingTranscript = !!transcript;
+
+  return (
+    <div className={styles.container}>
+      <div className={styles.paperTexture} />
+
+      {/* Header */}
+      <div className={styles.header}>
+        <div className={styles.logo}>
+          <div>
+            <div className={styles.logoBadge}>
+              № 042 ·{' '}
+              {new Date()
+                .toLocaleDateString('fr-FR', { month: 'short', day: '2-digit' })
+                .toUpperCase()}
             </div>
-
-            {/* Section Audio Compacte */}
-            <div className={styles.audioSection}>
-                <div className={styles.recordingControls}>
-                    <button
-                        onClick={toggleRecording}
-                        className={`${styles.recordButton} ${
-                            isRecording ? (isPaused ? styles.paused : styles.recording) :
-                                isProcessing ? styles.processing : styles.idle
-                        }`}
-                    >
-                        {isRecording ? (isPaused ? '▶️' : '⏸️') : isProcessing ? '⏳' : '🎙️'}
-                    </button>
-
-                    {(isRecording || isPaused) && (
-                        <button
-                            onClick={finalStopRecording}
-                            className={`${styles.stopButton}`}
-                        >
-                            ⏹️
-                        </button>
-                    )}
-
-                    {/* Barre de niveau audio */}
-                    {(isRecording || isPaused) && (
-                        <div className={styles.audioLevelContainer}>
-                            <div
-                                className={styles.audioLevelBar}
-                                style={{height: `${audioLevel}%`}}
-                            ></div>
-                        </div>
-                    )}
-                </div>
-
-                <div className={styles.statusArea}>
-                    <div className={`${styles.status} ${
-                        isRecording ? (isPaused ? styles.paused : styles.recording) :
-                            isProcessing ? styles.processing : styles.idle
-                    }`}>
-                        {status}
-                    </div>
-
-                    {(isRecording || isPaused) && (
-                        <div className={styles.timer}>{timer}</div>
-                    )}
-
-                    {timeWarning && (
-                        <div className={styles.timeWarning}>
-                            ⏱️ Limite de 15 minutes approche
-                        </div>
-                    )}
-
-                    {noAudioDetected && (
-                        <div className={styles.audioWarning}>
-                            🔇 Aucun son détecté
-                        </div>
-                    )}
-
-                    {/* Documents attachés */}
-                    {attachedDocuments.length > 0 && (
-                        <div className={styles.attachedDocs}>
-                            {attachedDocuments.map((doc, index) => (
-                                <div key={index} className={styles.docChip}>
-                                    <span>📎 {doc.name}</span>
-                                    <button
-                                        className={styles.docChipRemove}
-                                        onClick={() => removeDocument(index)}
-                                        title="Retirer ce document"
-                                    >
-                                        ✕
-                                    </button>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-
-                    {/* Barre de progression de la durée */}
-                    {(isRecording || isPaused) && (
-                        <div className={styles.fileSizeSection}>
-                            <div className={styles.fileSizeText}>
-                                ⏱️ {timer} / 15:00
-                            </div>
-                            <div className={styles.progressBarContainer}>
-                                <div
-                                    className={`${styles.progressBar} ${timeWarning ? styles.warning : ''}`}
-                                    style={{width: `${Math.min((parseInt(timer.split(':')[0]) * 60 + parseInt(timer.split(':')[1])) / MAX_RECORDING_DURATION_SECONDS * 100, 100)}%`}}
-                                />
-                            </div>
-                            <div className={styles.progressText}>
-                                {Math.round((parseInt(timer.split(':')[0]) * 60 + parseInt(timer.split(':')[1])) / MAX_RECORDING_DURATION_SECONDS * 100)}%
-                            </div>
-                        </div>
-                    )}
-                </div>
-                
-                {/* Message d'information sur le mode complément */}
-                {!isRecording && !isPaused && !isProcessing && transcript && (
-                    <div className={styles.infoMessage}>
-                        💡 Par défaut, un nouveau mémo complète la transcription existante
-                    </div>
-                )}
+            <div className={styles.logotype}>
+              Voix<span className={styles.logoAccent}>Là</span>
             </div>
-
-
-
-
-            {/* Messages d'erreur et sélection de modèle */}
-            <div className={styles.messagesSection}>
-                {error && (
-                    <div className={styles.error}>
-                        {error}
-                    </div>
-                )}
-
-                {retryError && (
-                    <div className={styles.errorRetry}>
-                        ⚠️ {retryError}
-                        <br/>
-                        {showRetryButton && (
-                            <button onClick={retryLastRequest} className={styles.retryButton}>
-                                🔄 Ressayer
-                            </button>
-                        )}
-                    </div>
-                )}
-            </div>
-
-            <div className={styles.transcriptSection}>
-                <h3>Transcription :</h3>
-                <div className={`${styles.transcriptBox} ${transcript ? styles.hasContent : ''} ${isEditing ? styles.editing : ''}`}
-                    style={{ position: 'relative' }}>
-                    {isProcessing ? (
-                        <div className={styles.loading}>
-                            <div className={styles.loader}></div>
-                            Transcription en cours...
-                        </div>
-                    ) : (
-                        <>
-                            {/* Affichage des exemples */}
-                            {showExamples && !transcript && !isEditing && (
-                                <div className={styles.examples}>
-                                    <div className={styles.exampleTitle}>💡 Exemples d'utilisation :</div>
-
-                                    <div className={styles.exampleItem}>
-                                        <strong>📧 Email professionnel :</strong><br/>
-                                        "Rédige un email pour mon client, ton professionnel, pour reporter notre réunion de demain..."
-                                    </div>
-
-                                    <div className={styles.exampleItem}>
-                                        <strong>📝 Article de blog :</strong><br/>
-                                        "Écris un article sur les tendances IA 2025, style décontracté, 500 mots environ..."
-                                    </div>
-
-                                    <div className={styles.exampleItem}>
-                                        <strong>💬 Message Slack :</strong><br/>
-                                        "Résume les points clés de notre réunion d'équipe, format court pour Slack..."
-                                    </div>
-
-                                    <div className={styles.exampleItem}>
-                                        <strong>📋 Rapport :</strong><br/>
-                                        "Transforme mes notes en rapport structuré pour la direction, ton formel..."
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* Affichage du contenu rendu (markdown ou texte) en lecture */}
-                            {!isEditing && transcript && (
-                                <>
-                                    {isMarkdown(transcript) ? (
-                                        <div className={styles.markdown}>
-                                            <ReactMarkdown>
-                                                {transcript}
-                                            </ReactMarkdown>
-                                        </div>
-                                    ) : (
-                                        <div className={styles.plainText}>
-                                            {transcript.split('\n').map((line, index) => (
-                                                <p key={index}>{line}</p>
-                                            ))}
-                                        </div>
-                                    )}
-                                </>
-                            )}
-
-                            {/* Zone éditable avec textarea */}
-                            {isEditing && (
-                                <textarea
-                                    ref={(el) => {
-                                        if (el && isEditing) {
-                                            setTimeout(() => el.focus(), 0)
-                                        }
-                                    }}
-                                    value={editBuffer}
-                                    onChange={(e) => setEditBuffer(e.target.value)}
-                                    className={styles.editableTranscript}
-                                    style={{
-                                        minHeight: '200px',
-                                        padding: '12px',
-                                        outline: 'none',
-                                        whiteSpace: 'pre-wrap',
-                                        wordWrap: 'break-word',
-                                        textAlign: 'left',
-                                        direction: 'ltr',
-                                        width: '100%',
-                                        boxSizing: 'border-box',
-                                        backgroundColor: '#f9f9f9',
-                                        border: '2px solid #4CAF50',
-                                        borderRadius: '4px',
-                                        fontFamily: 'inherit',
-                                        fontSize: 'inherit',
-                                        lineHeight: 'inherit'
-                                    }}
-                                />
-                            )}
-                        </>
-                    )}
-
-                    {/* Icône pencil/check pour contrôler le mode édition */}
-                    {!isProcessing && (hasInteracted || isEditing || showExamples) && (
-                        <button
-                            onClick={() => {
-                                if (isEditing) {
-                                    // Mode édition: valider
-                                    handleValidation(editBuffer)
-                                } else {
-                                    // Mode lecture: passer en édition
-                                    setHasInteracted(true)
-                                    setShowExamples(false)
-                                    setIsEditing(true)
-                                    setEditBuffer(transcript)
-                                }
-                            }}
-                            className={styles.editIconButton}
-                            title={isEditing ? 'Valider les modifications' : 'Éditer la transcription'}
-                            onMouseDown={(e) => e.preventDefault()}
-                            style={{
-                                position: 'absolute',
-                                top: '8px',
-                                right: '8px',
-                                width: '40px',
-                                height: '40px',
-                                borderRadius: '50%',
-                                border: 'none',
-                                backgroundColor: isEditing ? '#4CAF50' : '#2196F3',
-                                color: 'white',
-                                fontSize: '20px',
-                                cursor: 'pointer',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                boxShadow: '0 2px 8px rgba(0, 0, 0, 0.15)',
-                                transition: 'all 0.2s ease',
-                                zIndex: 10
-                            }}
-                            onMouseOver={(e) => {
-                                e.currentTarget.style.backgroundColor = isEditing ? '#45a049' : '#1976D2'
-                                e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.25)'
-                            }}
-                            onMouseOut={(e) => {
-                                e.currentTarget.style.backgroundColor = isEditing ? '#4CAF50' : '#2196F3'
-                                e.currentTarget.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.15)'
-                            }}
-                        >
-                            {isEditing ? '✓' : '✏️'}
-                        </button>
-                    )}
-                </div>
-
-                {transcript && (
-                    <>
-                        <div className={styles.copyButtons}>
-                            <button onClick={copyMarkdown} className={`${styles.copyButton} ${styles.notion}`}>
-                                📝 Copier pour Notion (MD)
-                            </button>
-                            <button onClick={copyFormatted} className={`${styles.copyButton} ${styles.html}`}>
-                                ✨ Copier pour Email/Word/Slack
-                            </button>
-                        </div>
-
-
-                    </>
-                )}
-
-                {costData && (
-                    <div className={styles.costInfo}>
-                        💰 Coût: {costData.totalEUR.toFixed(6)}€ ({costData.model})
-                    </div>
-                )}
-            </div>
-
-            <a
-                href="https://buymeacoffee.com/fpassx"
-                target="_blank"
-                rel="noopener noreferrer"
-                className={styles.coffeeButton}
-            >
-                Le service vous plait ? ☕ Offrez-moi un café 💕
-            </a>
-
-            {/* Section Historique */}
-            {history.length > 0 && (
-                <div className={styles.historySection}>
-                    <div className={styles.historyHeader}>
-                        <h3>📚 Historique des transcriptions ({history.length})</h3>
-                        <button
-                            onClick={clearHistory}
-                            className={styles.clearHistoryButton}
-                            title="Vider tout l'historique"
-                        >
-                            🗑️ Vider
-                        </button>
-                    </div>
-
-                    <div className={styles.historyList}>
-                        {history.map((item) => {
-                            const isExpanded = expandedHistoryItems.has(item.id)
-                            const date = new Date(item.timestamp)
-                            const timeAgo = Math.round((Date.now() - date.getTime()) / (1000 * 60)) // minutes
-
-                            return (
-                                <div key={item.id} className={styles.historyItem}>
-                                    <div
-                                        className={styles.historyItemHeader}
-                                        onClick={() => toggleHistoryExpansion(item.id)}
-                                    >
-                                        <div className={styles.historyItemInfo}>
-                                            <div className={styles.historyItemPreview}>
-                                                {item.preview}
-                                                {item.content.length > 100 && '...'}
-                                            </div>
-                                            <div className={styles.historyItemMeta}>
-                                                <span className={styles.modelBadge}>
-                                                    ⚡ Flash
-                                                </span>
-                                                <span className={styles.historyTime}>
-                                                    {timeAgo < 1 ? 'À l\'instant' :
-                                                        timeAgo < 60 ? `${timeAgo}min` :
-                                                            timeAgo < 1440 ? `${Math.round(timeAgo / 60)}h` :
-                                                                `${Math.round(timeAgo / 1440)}j`}
-                                                </span>
-                                            </div>
-                                        </div>
-                                        <div className={styles.historyItemActions}>
-                                            <button
-                                                className={styles.expandButton}
-                                                title={isExpanded ? 'Réduire' : 'Développer'}
-                                            >
-                                                {isExpanded ? '▼' : '▶'}
-                                            </button>
-                                        </div>
-                                    </div>
-
-                                    {isExpanded && (
-                                        <div className={styles.historyItemContent}>
-                                            <div className={styles.historyTranscript}>
-                                                {isMarkdown(item.content) ? (
-                                                    <div className={styles.markdown}>
-                                                        <ReactMarkdown>{item.content}</ReactMarkdown>
-                                                    </div>
-                                                ) : (
-                                                    <div className={styles.plainText}>
-                                                        {item.content.split('\n').map((line, index) => (
-                                                            <p key={index}>{line}</p>
-                                                        ))}
-                                                    </div>
-                                                )}
-                                            </div>
-
-                                            <div className={styles.historyItemFooter}>
-                                                <div className={styles.historyButtons}>
-                                                    <button
-                                                        onClick={() => restoreFromHistory(item)}
-                                                        className={`${styles.historyButton} ${styles.restore}`}
-                                                        title="Restaurer cette transcription"
-                                                    >
-                                                        📄 Restaurer
-                                                    </button>
-                                                    <button
-                                                        onClick={() => navigator.clipboard.writeText(item.content)}
-                                                        className={`${styles.historyButton} ${styles.copy}`}
-                                                        title="Copier cette transcription"
-                                                    >
-                                                        📋 Copier
-                                                    </button>
-                                                    <button
-                                                        onClick={() => deleteFromHistory(item.id)}
-                                                        className={`${styles.historyButton} ${styles.delete}`}
-                                                        title="Supprimer cette transcription"
-                                                    >
-                                                        🗑️ Supprimer
-                                                    </button>
-                                                </div>
-
-                                                {item.cost && (
-                                                    <div className={styles.historyCost}>
-                                                        💰 {item.cost.totalEUR.toFixed(6)}€
-                                                    </div>
-                                                )}
-
-                                                <div className={styles.historyDate}>
-                                                    📅 {date.toLocaleString('fr-FR')}
-                                                </div>
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
-                            )
-                        })}
-                    </div>
-                </div>
-            )}
-
-            <footer className={styles.footer}>
-                <div className={styles.footerContent}>
-                    <div>🧪 <strong>VoixLà</strong> est une expérimentation en cours... mais on peut déjà se dire que c'est la meilleure app de la <strong>DicTech</strong> ! 🚀</div>
-                    <div style={{marginTop: '15px', display: 'flex', gap: '12px', justifyContent: 'center', alignItems: 'center', flexWrap: 'wrap'}}>
-                        <span className={styles.privacyBadge}>🔐 Données anonymes</span>
-                        <button
-                            onClick={() => setShowAboutModal(true)}
-                            className={styles.aboutButton}
-                        >
-                            ℹ️ À propos
-                        </button>
-                    </div>
-                </div>
-            </footer>
-
-            {/* Modal À propos */}
-            {showAboutModal && (
-                <div
-                    className={styles.modalOverlay}
-                    onClick={() => setShowAboutModal(false)}
-                >
-                    <div
-                        className={styles.modalContent}
-                        onClick={(e) => e.stopPropagation()}
-                    >
-                        <button
-                            className={styles.modalClose}
-                            onClick={() => setShowAboutModal(false)}
-                            aria-label="Fermer"
-                        >
-                            ✕
-                        </button>
-
-                        <h2>À propos de VoixLà</h2>
-
-                        <div style={{textAlign: 'left', lineHeight: '1.6', color: '#555'}}>
-                            <p>
-                                <strong>VoixLà</strong> est une application simple et puissante de transcription vocale
-                                alimentée par l'IA Gemini. Elle transforme vos memos vocaux en texte structuré prêt à être
-                                utilisé, que ce soit pour des emails, des articles, des rapports, ou plus encore.
-                            </p>
-
-                            <h3 style={{marginTop: '20px', marginBottom: '10px', color: '#333'}}>🔒 Confidentialité</h3>
-                            <ul style={{paddingLeft: '20px', margin: '10px 0'}}>
-                                <li>Aucune donnée n'est stockée sur notre serveur</li>
-                                <li>Aucun enregistrement audio ou transcription conservé</li>
-                                <li>Vous restez entièrement maître de vos données</li>
-                                <li>Utilisation 100% anonyme</li>
-                            </ul>
-
-                            <h3 style={{marginTop: '20px', marginBottom: '10px', color: '#333'}}>👤 Créateur</h3>
-                            <p>Créé par <strong>Frédéric Passaniti</strong></p>
-
-                            <h3 style={{marginTop: '20px', marginBottom: '10px', color: '#333'}}>🔗 Liens utiles</h3>
-                            <div className={styles.modalLinks}>
-                                <a href="https://www.linkedin.com/in/frederic-passaniti/" target="_blank" rel="noopener noreferrer">
-                                    💼 LinkedIn
-                                </a>
-                                <a href="https://github.com/fpassaniti/" target="_blank" rel="noopener noreferrer">
-                                    🐙 GitHub
-                                </a>
-                                <a href="https://github.com/fpassaniti/voixla" target="_blank" rel="noopener noreferrer">
-                                    📦 Code source
-                                </a>
-                                <a href="https://buymeacoffee.com/fpassx" target="_blank" rel="noopener noreferrer">
-                                    ☕ Buy me a coffee
-                                </a>
-                            </div>
-
-                            <p style={{marginTop: '20px', fontSize: '0.9rem', color: '#999', textAlign: 'center'}}>
-                                ✨ Open source et fait avec ❤️
-                            </p>
-                        </div>
-                    </div>
-                </div>
-            )}
+          </div>
         </div>
-    )
+        <div className={styles.headerPills}>
+          <button
+            className={`${styles.iconPill} ${showHistoryDrawer ? styles.active : ''}`}
+            onClick={() => setShowHistoryDrawer(!showHistoryDrawer)}
+          >
+            <IconHistory size={18} weight={1.6} />
+          </button>
+          <button
+            className={styles.iconPill}
+            onClick={() => setShowAboutModal(true)}
+          >
+            <IconInfo size={18} weight={1.6} />
+          </button>
+        </div>
+      </div>
+
+      {/* Meta rule */}
+      <div className={styles.metaRule}>
+        <span>Transcription vocale · Gemini</span>
+        <span>FR</span>
+      </div>
+
+      {/* Main content */}
+      <div
+        className={`${styles.content} ${
+          showingTranscript ? styles.withTranscript : ''
+        }`}
+      >
+        {!showingTranscript &&
+          !isRecording &&
+          !isPaused &&
+          !isProcessing && (
+            <div className={styles.emptyState}>
+              <div className={styles.emptyHeading}>
+                Parlez.
+                <br />
+                <span className={styles.emptyHeadingSecondary}>
+                  Nous écrivons pour vous.
+                </span>
+              </div>
+              <p className={styles.emptyDescription}>
+                Un mémo vocal, une idée, un brouillon d'email. VoixLà
+                transcrit, met en forme, et garde trace.
+              </p>
+              <div className={styles.examplesLabel}>Quelques idées —</div>
+              <div className={styles.examplesList}>
+                {EXAMPLES.map((ex, i) => (
+                  <div key={i} className={styles.exampleItem}>
+                    <div className={styles.exampleTag}>{ex.tag}</div>
+                    <div className={styles.exampleText}>{ex.text}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+        {(isRecording || isPaused) && (
+          <div className={styles.recordingPanel}>
+            <div className={styles.timerDisplay}>{fmtTime(timer)}</div>
+            <div className={styles.recordingStatus}>
+              <div
+                className={`${styles.recordingStatusDot} ${
+                  isPaused ? styles.paused : ''
+                }`}
+              />
+              {isPaused ? 'En pause' : 'Enregistrement'}
+            </div>
+            <div className={styles.waveformContainer}>
+              <Waveform
+                level={isPaused ? 0.15 : audioLevel}
+                active={!isPaused}
+                accent="var(--accent)"
+              />
+            </div>
+            <div className={styles.recordingControls}>
+              <button
+                className={styles.iconPill}
+                onClick={handleStop}
+              >
+                <IconStop size={20} weight={1.6} />
+              </button>
+              <button
+                className={`${styles.recordButton} ${
+                  isRecording ? styles.recording : styles.paused
+                }`}
+                onClick={handleRecord}
+              >
+                {isRecording ? (
+                  <IconPause size={32} />
+                ) : (
+                  <IconPlay size={32} />
+                )}
+              </button>
+              <button
+                className={styles.iconPill}
+              >
+                <IconPaperclip size={20} weight={1.6} />
+              </button>
+            </div>
+            <div className={styles.progressRail}>
+              <div className={styles.progressTrack}>
+                <div
+                  className={styles.progressBar}
+                  style={{
+                    width: `${Math.min((timer / (15 * 60)) * 100, 100)}%`,
+                  }}
+                />
+              </div>
+              <div className={styles.progressLabels}>
+                <span>{fmtTime(timer)}</span>
+                <span>LIMITE 15:00</span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isProcessing && (
+          <div className={styles.processingState}>
+            <div className={styles.processingDots}>
+              <div className={styles.processingDot} />
+              <div className={styles.processingDot} />
+              <div className={styles.processingDot} />
+            </div>
+            <div className={styles.processingMessage}>Je mets en mots…</div>
+            <div className={styles.processingCaption}>Gemini Flash</div>
+          </div>
+        )}
+
+        {showingTranscript && !isProcessing && (
+          <div>
+            <div className={styles.transcriptMeta}>
+              <div className={styles.transcriptMetaLeft}>
+                <IconCheck size={12} color="var(--accent)" weight={2} />
+                <span>Transcrit · {costData ? new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : ''}</span>
+              </div>
+              <span>
+                {transcript.split(/\s+/).length} mots ·{' '}
+                {costData?.totalEUR.toFixed(3)}€
+              </span>
+            </div>
+
+            <div
+              className={`${styles.transcriptBox} ${
+                isMarkdown(transcript) ? styles.markdown : styles.plainText
+              }`}
+            >
+              {isEditing ? (
+                <textarea
+                  className={styles.editTextarea}
+                  value={editBuffer}
+                  onChange={(e) => setEditBuffer(e.target.value)}
+                  autoFocus
+                />
+              ) : isMarkdown(transcript) ? (
+                <ReactMarkdown>{transcript}</ReactMarkdown>
+              ) : (
+                <div>{transcript}</div>
+              )}
+            </div>
+
+            <div className={styles.transcriptActions}>
+              {isEditing ? (
+                <>
+                  <button
+                    className={`${styles.actionChip} ${styles.primary}`}
+                    onClick={() => {
+                      setTranscript(editBuffer);
+                      setIsEditing(false);
+                    }}
+                  >
+                    <IconCheck size={14} weight={2} />
+                    Valider
+                  </button>
+                  <button
+                    className={styles.actionChip}
+                    onClick={() => setIsEditing(false)}
+                  >
+                    <IconX size={14} weight={2} />
+                    Annuler
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    className={styles.actionChip}
+                    onClick={handleCopyMarkdown}
+                  >
+                    <IconCopy size={14} weight={1.6} />
+                    Copier MD
+                  </button>
+                  <button
+                    className={styles.actionChip}
+                    onClick={handleCopyPlain}
+                  >
+                    <IconCopy size={14} weight={1.6} />
+                    Copier texte
+                  </button>
+                  <button
+                    className={styles.actionChip}
+                    onClick={handleDownload}
+                  >
+                    <IconDownload size={14} weight={1.6} />
+                    Télécharger
+                  </button>
+                  <button
+                    className={`${styles.actionChip} ${styles.primary}`}
+                    onClick={handleNew}
+                  >
+                    <IconPlus size={14} weight={2} />
+                    Nouveau
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Bottom dock */}
+      {!isRecording && !isPaused && (
+        <div className={styles.bottomDock}>
+          <div className={styles.bottomDockLabel}>
+            {isProcessing
+              ? 'Un instant…'
+              : showingTranscript
+                ? 'Compléter le mémo'
+                : 'Appuyer pour parler'}
+          </div>
+          <div className={styles.bottomDockControls}>
+            <button
+              className={styles.iconPill}
+              onClick={() => attachFileInputRef.current?.click()}
+              title="Pièces jointes"
+            >
+              <IconPaperclip size={18} weight={1.6} />
+            </button>
+            <button
+              className={`${styles.recordButton} ${
+                isProcessing ? styles.processing : styles.idle
+              }`}
+              onClick={handleRecord}
+            >
+              {isProcessing ? (
+                <IconSparkle size={34} />
+              ) : (
+                <IconMic size={34} weight={1.75} />
+              )}
+            </button>
+            <button
+              className={`${styles.iconPill} ${recordedAudioRef.current ? '' : styles.disabled}`}
+              onClick={recordedAudioRef.current ? handleDownloadAudio : undefined}
+              title="Télécharger audio"
+              disabled={!recordedAudioRef.current}
+            >
+              <IconDownload size={18} weight={1.6} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* History drawer */}
+      {showHistoryDrawer && (
+        <>
+          <div
+            className={styles.historyBackdrop}
+            onClick={() => setShowHistoryDrawer(false)}
+          />
+          <div className={styles.historyDrawer}>
+            <div className={styles.historyHandle}>
+              <div className={styles.historyHandleBar} />
+            </div>
+            <div className={styles.historyHeader}>
+              <div>
+                <div className={styles.historyBadge}>
+                  Journal · {history.length} entrées
+                </div>
+                <div className={styles.historyTitle}>Historique</div>
+              </div>
+              <button
+                className={styles.iconPill}
+                onClick={() => setShowHistoryDrawer(false)}
+              >
+                <IconX size={16} weight={1.8} />
+              </button>
+            </div>
+            <div className={styles.historyList}>
+              {history.map((item) => (
+                <div
+                  key={item.id}
+                  className={styles.historyItem}
+                  onClick={() => handleRestoreHistory(item)}
+                >
+                  <div className={styles.historyDuration}>{item.duration}</div>
+                  <div className={styles.historyContent}>
+                    <div className={styles.historyPreview}>{item.preview}</div>
+                    <div className={styles.historyMeta}>
+                      <span>{item.date}</span>
+                      <span>·</span>
+                      <span>{item.wordCount} mots</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* About modal (colophon) */}
+      {showAboutModal && (
+        <div
+          className={styles.colophonBackdrop}
+          onClick={() => setShowAboutModal(false)}
+        >
+          <div
+            className={styles.colophonModal}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className={styles.colophonContent}>
+              <div className={styles.colophonHeader}>
+                <div>
+                  <div className={styles.colophonBadge}>Colophon</div>
+                  <div className={styles.colophonTitle}>À propos</div>
+                </div>
+                <button
+                  className={styles.colophonCloseButton}
+                  onClick={() => setShowAboutModal(false)}
+                >
+                  <IconX size={14} weight={1.8} />
+                </button>
+              </div>
+
+              <p className={styles.colophonDescription}>
+                VoixLà transforme votre voix en texte bien mis en forme. Un
+                outil simple, rapide, pensé pour le quotidien — brouillons
+                d'emails, notes, briefs, idées à la volée.
+              </p>
+
+              <div className={styles.colophonCallout}>
+                <IconShield size={20} weight={1.6} color="var(--accent)" />
+                <div>
+                  <div className={styles.colophonCalloutTitle}>
+                    Confidentialité
+                  </div>
+                  <div className={styles.colophonCalloutText}>
+                    Aucun audio n'est stocké. L'historique reste sur votre
+                    appareil.
+                  </div>
+                </div>
+              </div>
+
+              <div className={styles.colophonSpecLabel}>Spécifications —</div>
+              <div className={styles.colophonSpecTable}>
+                {COLOPHON_SPECS.map(([key, value], i) => (
+                  <div key={i} className={styles.colophonSpecRow}>
+                    <span className={styles.colophonSpecKey}>{key}</span>
+                    <span className={styles.colophonSpecValue}>{value}</span>
+                  </div>
+                ))}
+              </div>
+
+              <div className={styles.colophonFooter}>
+                Fait avec ♥ par Fred · v1.1.0
+                {process.env.NEXT_PUBLIC_BUYMEACOFFEE_URL && (
+                  <br/>
+                )}
+              </div>
+              {process.env.NEXT_PUBLIC_BUYMEACOFFEE_URL && (
+                <a
+                  href={process.env.NEXT_PUBLIC_BUYMEACOFFEE_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={styles.coffeeButton}
+                  style={{ display: 'block', marginLeft: 'auto', marginRight: 'auto' }}
+                >
+                  Le service vous plaît ? ☕ Offrez-moi un café 💕
+                </a>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Hidden file inputs */}
+      <input
+        ref={attachFileInputRef}
+        type="file"
+        multiple
+        accept=".pdf,.png,.jpg,.jpeg,.gif,.docx,.xlsx"
+        onChange={handleAttachFiles}
+        style={{ display: 'none' }}
+      />
+      <input
+        ref={importAudioInputRef}
+        type="file"
+        accept=".wav,.mp3,.webm,.m4a,.ogg"
+        onChange={handleImportAudio}
+        style={{ display: 'none' }}
+      />
+    </div>
+  );
 }
