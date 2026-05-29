@@ -245,7 +245,7 @@ IMPORTANT : Réponds uniquement avec le texte final rédigé, prêt à être uti
     console.log(`📝 Longueur du prompt: ${prompt.length} caractères`)
 
     // Utiliser uniquement Gemini Flash
-    const modelName = 'gemini-3-flash-preview'
+    const modelName = process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite'
     const model = genAI.getGenerativeModel({ model: modelName })
 
     // Construire les parts pour generateContent
